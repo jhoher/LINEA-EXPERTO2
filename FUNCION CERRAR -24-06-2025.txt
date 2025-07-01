@@ -1,0 +1,3223 @@
+int GetCurrentDeviation() {
+    return 10; // Devolver el valor por defecto
+}
+
+//+------------------------------------------------------------------+
+//| Función para encontrar la secuencia que corresponde a un ticket  |
+//+------------------------------------------------------------------+
+int EncontrarSecuenciaPorTicket(ulong ticket)
+{
+    if(ticket == 0) return -1;
+    
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+        {
+            // Buscar primero en tickets registrados específicos
+            if(secuencias[i].ticketEntrada1 == ticket || secuencias[i].ticketEntrada2 == ticket)
+                return i;
+                
+            // Buscar en array de últimas órdenes
+            for(int j = 0; j < secuencias[i].numOrdenes; j++)
+            {
+                if(secuencias[i].ultimasOrdenes[j] == ticket)
+                    return i;
+            }
+        }
+    }
+    
+    return -1; // No encontrado
+}
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+#property copyright "Your Name"
+#property link      "https://www.yourwebsite.com"
+#property version   "1.00"
+#property strict
+
+// Incluir archivos necesarios
+#include <Trade\Trade.mqh>
+
+// Prefijo para identificar objetos del EA
+string EA_OBJ_PREFIX = "EA_SECUENCIAS_";
+
+// Identificadores de objetos
+string panelPrincipalID = "PanelPrincipal";
+string editLotajeID = "EditLotaje";
+string botonCompraID = "BotonCompra";
+string botonVentaID = "BotonVenta";
+string editTP1ID = "EditTP1";
+string editPipsEntrada2ID = "EditPipsEntrada2";
+string editTP2ID = "EditTP2";
+string editNumEntradaID = "EditNumEntrada"; 
+string editMinimaGID = "EditMinimaG"; // Campo para Minima G.
+string editNumCerrarID = "EditNumCerrar"; // NUEVO campo para # Cerrar
+
+// Variables globales
+double LotajeInicial = 0.01;
+int TP1Puntos = 100;
+int PipsEntrada2 = 20;
+int TP2Puntos = 100;
+int NumEntrada = 0; // CAMBIADO: Inicializado en 0 para permitir campo vacío
+double MinimaG = 0.0; // Valor para el campo Minima G.
+int NumCerrar = 0; // Número de entrada en el que se cerrará toda la secuencia
+bool interfazCreada = false;
+
+// Variable para controlar la verificación de órdenes pendientes
+datetime ultimaVerificacionPendientes = 0;
+
+// Estructura para almacenar datos de secuencia
+struct SecuenciaInfo {
+    int id;                  // Identificador único de secuencia
+    bool activa;             // Si la secuencia está activa
+    double precioEntrada1;   // Precio de la entrada 1
+    double precioEntrada2;   // Precio de la entrada 2
+    double tp1Precio;        // Precio TP de entrada 1
+    double tp2Precio;        // Precio TP de entrada 2
+    int secuenciaActual;     // Número actual de entrada en la secuencia
+    datetime tiempoInicio;   // Tiempo de inicio
+    ulong ultimasOrdenes[10]; // Tickets de las últimas órdenes en la secuencia
+    int numOrdenes;          // Contador de órdenes en ultimasOrdenes
+    datetime ultimaVerificacionTP; // Último tiempo de verificación de TP
+    bool tpAlcanzado;        // Indica si se detectó TP
+    bool cerradaCompletamente; // Indica si la secuencia se cerró completamente
+    int intentosCierre;      // Contador de intentos de cierre
+    datetime ultimoCierreIntentado; // Último momento en que se intentó cerrar
+    bool esModoCompra;       // Indica si es una secuencia iniciada con COMPRA (true) o VENTA (false)
+    ulong ticketEntrada1;    // Ticket de la entrada 1
+    ulong ticketEntrada2;    // Ticket de la entrada 2
+    bool entradaPendienteActiva; // Indica si hay una entrada pendiente activa
+    datetime ultimaRecreacionPendiente; // Tiempo de la última recreación de la orden pendiente
+    bool cerradaManualmente; // Indica si la entrada pendiente fue cerrada manualmente
+    datetime ultimaVerificacionPendientes; // Último tiempo que se verificó si hay pendientes
+    bool sinOrdenesPendientesDetectado; // Flag para saber si ya se detectó que no hay pendientes
+    bool tpReubicado;  // Nuevo campo para controlar si ya se reubicó el TP
+    int ultimasPosicionesConsideradas; // Número de posiciones en el último cálculo de TP
+};
+
+// Array para almacenar múltiples secuencias sin límite estricto
+SecuenciaInfo secuencias[20]; // Ampliado a 20 secuencias para dar más holgura
+int totalSecuencias = 0;
+int proximoIDSecuencia = 1;
+
+// Instancia de CTrade
+CTrade trade;
+
+// Declaraciones previas de funciones para evitar errores de compilación
+void CerrarSecuencia(int indice);
+void CerrarTodasLasOrdenesDeSecuencia(int indice, bool cierreRapido = false);
+void RecuperarOrdenesPendientes();
+void CerrarTodasLasSecuencias();
+void IniciarSecuencia(bool esCompra);
+void IniciarSecuenciaCompra();
+void IniciarSecuenciaVenta();
+void LimpiarSecuenciasFantasma();
+void VerificarOrdenesPendientes();
+void VerificarCierrePorFaltaDePendientes();
+void VerificarNuevasActivaciones(int indice);
+void VerificarCierrePorNumeroEntrada(int indiceSecuencia);
+bool RecrearOrdenEntrada2(int indice);
+void GuardarEstadoSecuencias();
+void GuardarEstadoSecuenciasConID();
+void ResetearSecuencia(int indice);
+void RestaurarEstadoSecuencias();
+void CrearInterfaz();
+void CrearPanelPrincipal(int x, int y, int ancho, int alto);
+void CrearBoton(string id, string texto, int x, int y, int ancho, int alto, color bgColor);
+void CrearCampoEdicionEstilizado(string id, string label, int x, int y, int ancho, int alto, string valor);
+void ReubicarTPsParaGarantiaMinimaG(int indiceSecuencia);
+void DiagnosticarSecuencia(int indiceSecuencia);
+void LimpiarOrdenesHuerfanas();
+void GuardarValores();
+void RegistrarOrden(int indice, ulong ticket, string comentario="");
+void ProgramarSiguienteEntrada(int indice);
+int EncontrarSecuenciaPorTicket(ulong ticket);
+void RecalcularTotalSecuencias();
+void LimpiarSecuenciasProblematicas();
+void ActualizarInformacionSecuencias();
+bool TieneOrdenesPendientes(int indice, bool &tieneMultiples);
+void EliminarOrdenesPendientesDuplicadas(int indice);
+double CalcularComisionPepperstone(double volumen);
+double CalcularPLTotalConTP(int indiceSecuencia, double precioTP);
+bool VerificarExistenciaOrdenPendiente(ulong ticket);
+void ResetearTodasLasSecuencias();
+void RestaurarValores();
+
+//+------------------------------------------------------------------+
+//| Función para capturar eventos de trading (órdenes, posiciones)   |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                       const MqlTradeRequest& request,
+                       const MqlTradeResult& result)
+{
+    // Solo nos interesa detectar eliminaciones de órdenes pendientes
+    if(trans.type == TRADE_TRANSACTION_ORDER_DELETE)
+    {
+        ulong ticketEliminado = trans.order;
+        
+        // Encontrar a qué secuencia pertenece esta orden
+        int indiceSecuencia = EncontrarSecuenciaPorTicket(ticketEliminado);
+        if(indiceSecuencia >= 0)
+        {
+            // Verificar si es la orden ENTRADA #2
+            if(secuencias[indiceSecuencia].ticketEntrada2 == ticketEliminado)
+            {
+                // Si la razón de eliminación NO es cambio de timeframe o activación,
+                // asumimos que fue eliminación manual
+                if(trans.order_state == ORDER_STATE_CANCELED)
+                {
+                    Print("🖐️ Detectada eliminación manual de orden pendiente #", ticketEliminado, 
+                          " para secuencia #", secuencias[indiceSecuencia].id);
+                    
+                    secuencias[indiceSecuencia].cerradaManualmente = true;
+                    secuencias[indiceSecuencia].entradaPendienteActiva = false;
+                    
+                    // Guardar este estado para persistencia
+                    GuardarEstadoSecuencias();
+                }
+            }
+        }
+    }
+}
+//+------------------------------------------------------------------+
+//| ChartEvent function                                              |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+    // Asegurarse de que la interfaz siempre está presente
+    if(!interfazCreada) {
+        CrearInterfaz();
+        interfazCreada = true;
+    }
+    
+    // Si se detecta un cambio en algún control de edición
+    if(id == CHARTEVENT_OBJECT_ENDEDIT) 
+    {
+        // Capturar el valor actualizado cada vez que el usuario edita un campo
+        if(sparam == EA_OBJ_PREFIX + editLotajeID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            LotajeInicial = StringToDouble(texto);
+            // Guardar inmediatamente
+            GlobalVariableSet("EA_LOTAJE_" + Symbol(), LotajeInicial);
+            Print("Lotaje actualizado a: ", LotajeInicial);
+        }
+        else if(sparam == EA_OBJ_PREFIX + editTP1ID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            TP1Puntos = (int)StringToInteger(texto);
+            GlobalVariableSet("EA_TP1_" + Symbol(), TP1Puntos);
+            Print("TP1 actualizado a: ", TP1Puntos);
+        }
+        else if(sparam == EA_OBJ_PREFIX + editPipsEntrada2ID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            PipsEntrada2 = (int)StringToInteger(texto);
+            GlobalVariableSet("EA_PIPS_E2_" + Symbol(), PipsEntrada2);
+            Print("Pips Entrada2 actualizado a: ", PipsEntrada2);
+        }
+        else if(sparam == EA_OBJ_PREFIX + editTP2ID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            TP2Puntos = (int)StringToInteger(texto);
+            GlobalVariableSet("EA_TP2_" + Symbol(), TP2Puntos);
+            Print("TP2 actualizado a: ", TP2Puntos);
+        }
+        else if(sparam == EA_OBJ_PREFIX + editNumEntradaID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            // Permitir campo vacío o "0"
+            if(texto == "" || texto == "0")
+            {
+                NumEntrada = 0;
+            }
+            else
+            {
+                NumEntrada = (int)StringToInteger(texto);
+            }
+            GlobalVariableSet("EA_NUM_ENTRADA_" + Symbol(), NumEntrada);
+            Print("# Reubicar actualizado a: ", NumEntrada);
+        }
+        else if(sparam == EA_OBJ_PREFIX + editMinimaGID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            MinimaG = StringToDouble(texto);
+            GlobalVariableSet("EA_MINIMA_G_" + Symbol(), MinimaG);
+            Print("Minima G. actualizada a: ", MinimaG);
+        }
+        else if(sparam == EA_OBJ_PREFIX + editNumCerrarID) 
+        {
+            string texto = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            // Permitir campo vacío o "0"
+            if(texto == "" || texto == "0")
+            {
+                NumCerrar = 0;
+            }
+            else
+            {
+                NumCerrar = (int)StringToInteger(texto);
+            }
+            GlobalVariableSet("EA_NUM_CERRAR_" + Symbol(), NumCerrar);
+            Print("# Cerrar actualizado a: ", NumCerrar);
+        }
+    }
+    
+    // Si se detecta un cambio de timeframe
+    if(id == CHARTEVENT_CHART_CHANGE)
+    {
+        Print("Cambio de chart detectado - Asegurando persistencia de órdenes");
+        
+        // Guardar el estado actual de las secuencias antes del cambio, incluyendo ID
+        GuardarEstadoSecuenciasConID();
+        
+        // Guardar los valores actuales de los controles antes de recrear la interfaz
+        if(ObjectFind(0, EA_OBJ_PREFIX + editLotajeID) >= 0)
+            LotajeInicial = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT));
+            
+        if(ObjectFind(0, EA_OBJ_PREFIX + editTP1ID) >= 0)
+            TP1Puntos = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editTP1ID, OBJPROP_TEXT));
+            
+        if(ObjectFind(0, EA_OBJ_PREFIX + editPipsEntrada2ID) >= 0)
+            PipsEntrada2 = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editPipsEntrada2ID, OBJPROP_TEXT));
+            
+        if(ObjectFind(0, EA_OBJ_PREFIX + editTP2ID) >= 0)
+            TP2Puntos = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editTP2ID, OBJPROP_TEXT));
+            
+        if(ObjectFind(0, EA_OBJ_PREFIX + editNumEntradaID) >= 0)
+        {
+            string texto = ObjectGetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT);
+            if(texto == "" || texto == "0")
+                NumEntrada = 0;
+            else
+                NumEntrada = (int)StringToInteger(texto);
+        }
+            
+        if(ObjectFind(0, EA_OBJ_PREFIX + editMinimaGID) >= 0)
+            MinimaG = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editMinimaGID, OBJPROP_TEXT));
+            
+        if(ObjectFind(0, EA_OBJ_PREFIX + editNumCerrarID) >= 0)
+        {
+            string texto = ObjectGetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT);
+            if(texto == "" || texto == "0")
+                NumCerrar = 0;
+            else
+                NumCerrar = (int)StringToInteger(texto);
+        }
+        
+        // Guardar explícitamente estos valores
+        GuardarValores();
+        
+        // Recrear la interfaz si es necesario
+        CrearInterfaz();
+        
+        // Verificar y recrear órdenes pendientes que puedan haberse perdido
+        for(int i = 0; i < 10; i++)
+        {
+            if(secuencias[i].activa && secuencias[i].entradaPendienteActiva && !secuencias[i].cerradaManualmente)
+            {
+                Print("🔄 Verificando orden pendiente para secuencia #", secuencias[i].id, " después de cambio de timeframe");
+                secuencias[i].ultimaRecreacionPendiente = 0; // Forzar verificación inmediata
+                RecrearOrdenEntrada2(i);
+            }
+        }
+        
+        // Para evitar perder objetos dibujados manualmente, no hacer limpieza general
+        return;
+    }
+    
+    // Gestión de clics en botones
+    if(id == CHARTEVENT_OBJECT_CLICK)
+    {
+        // Verificar si se ha hecho clic en uno de nuestros botones
+        if(sparam == EA_OBJ_PREFIX + botonCompraID)
+        {
+            Print("Botón COMPRA presionado");
+            ObjectSetInteger(0, EA_OBJ_PREFIX + botonCompraID, OBJPROP_STATE, false);
+            
+            // Limpiar secuencias fantasma antes de intentar iniciar una nueva
+            LimpiarSecuenciasFantasma();
+            
+            // Iniciar secuencia sin restricción de límite
+            IniciarSecuenciaCompra();
+        }
+        else if(sparam == EA_OBJ_PREFIX + botonVentaID)
+        {
+            Print("Botón VENTA presionado");
+            ObjectSetInteger(0, EA_OBJ_PREFIX + botonVentaID, OBJPROP_STATE, false);
+            
+            // Limpiar secuencias fantasma antes de intentar iniciar una nueva
+            LimpiarSecuenciasFantasma();
+            
+            // Iniciar secuencia sin restricción de límite
+            IniciarSecuenciaVenta();
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    // Si la interfaz no está creada, recrearla
+    if(!interfazCreada) {
+        CrearInterfaz();
+        interfazCreada = true;
+    }
+    
+    // Verificar órdenes pendientes periódicamente
+    VerificarOrdenesPendientes();
+    
+    // Nueva función: Verificar secuencias sin órdenes pendientes y cerrarlas
+    VerificarCierrePorFaltaDePendientes();
+    
+    // Procesar cada secuencia activa
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(!secuencias[i].activa) continue;
+
+        // Si ya se detectó TP, asegurarse de que todas las órdenes estén cerradas
+        if(secuencias[i].tpAlcanzado)
+        {
+            // Reintentar cierre si no se ha cerrado completamente
+            if(!secuencias[i].cerradaCompletamente)
+            {
+                // Limitar la frecuencia de reintentos a cada 1 segundo
+                if(TimeCurrent() - secuencias[i].ultimoCierreIntentado >= 1)
+                {
+                    Print("⚠️ Reintentando cierre para secuencia #", secuencias[i].id, 
+                          " - Intento #", ++secuencias[i].intentosCierre);
+                    secuencias[i].ultimoCierreIntentado = TimeCurrent();
+                    
+                    CerrarTodasLasOrdenesDeSecuencia(i);
+                    
+                    // Si ya se intentó cerrar muchas veces, marcarla como cerrada de todos modos
+                    if(secuencias[i].intentosCierre >= 5)
+                    {
+                        Print("🛑 Alcanzado máximo de intentos para secuencia #", secuencias[i].id, 
+                              " - Marcando como cerrada");
+                        secuencias[i].cerradaCompletamente = true;
+                        secuencias[i].activa = false;
+                        totalSecuencias--;
+                    }
+                }
+            }
+            continue;
+        }
+        // Verificación de TP - cada tick para mayor precisión
+        bool tpAlcanzado = false;
+        
+        // Verificar TPs en posiciones actuales (solo afecta a las entradas 1 y 2 que tienen TP)
+        for(int j = 0; j < PositionsTotal(); j++)
+        {
+            ulong ticket = PositionGetTicket(j);
+            if(!PositionSelectByTicket(ticket)) continue;
+            
+            string comentario = PositionGetString(POSITION_COMMENT);
+            string secPrefix = "SEC" + IntegerToString(secuencias[i].id) + "_";
+            
+            // Si es una posición de esta secuencia
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                double tp = PositionGetDouble(POSITION_TP);
+                if(tp == 0) continue;  // Omitir posiciones sin TP
+                
+                double precioActual = PositionGetDouble(POSITION_PRICE_CURRENT);
+                ENUM_POSITION_TYPE tipo = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+                
+                // Verificar si está muy cerca o ha superado el TP (3 puntos para ser más agresivo)
+                if((tipo == POSITION_TYPE_BUY && precioActual >= tp - 3*_Point) ||
+                   (tipo == POSITION_TYPE_SELL && precioActual <= tp + 3*_Point))
+                {
+                    tpAlcanzado = true;
+                    Print("⭐ TP alcanzado o cercano en posición #", ticket, " - Secuencia #", secuencias[i].id);
+                    break;
+                }
+            }
+        }
+        
+        // Verificar historial de operaciones recientes para ver si se cerró alguna por TP
+        if(!tpAlcanzado)
+        {
+            string secPrefix = "SEC" + IntegerToString(secuencias[i].id) + "_";
+            
+            datetime startTime = TimeCurrent() - 120; // Buscar en los últimos 2 minutos
+            if(HistorySelect(startTime, TimeCurrent()))
+            {
+                for(int k = 0; k < HistoryDealsTotal(); k++)
+                {
+                    ulong dealTicket = HistoryDealGetTicket(k);
+                    if(!HistoryDealSelect(dealTicket)) continue;
+                    
+                    string comentario = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+                    if(StringFind(comentario, secPrefix) == 0)
+                    {
+                        // Verificar si es un cierre de posición
+                        if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_OUT)
+                        {
+                            double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                            ENUM_DEAL_REASON razon = (ENUM_DEAL_REASON)HistoryDealGetInteger(dealTicket, DEAL_REASON);
+                            
+                            // Si se cerró por TP o con beneficio
+                            if(razon == DEAL_REASON_TP || profit > 0)
+                            {
+                                tpAlcanzado = true;
+                                Print("⭐ TP detectado en historial - Deal #", dealTicket, " - Secuencia #", secuencias[i].id);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Si se alcanzó TP, cerrar toda la secuencia
+        if(tpAlcanzado)
+        {
+            secuencias[i].tpAlcanzado = true;
+            secuencias[i].ultimoCierreIntentado = TimeCurrent();
+            string tipoSecuencia = secuencias[i].esModoCompra ? "COMPRA" : "VENTA";
+            Print("⚠️ TAKE PROFIT ALCANZADO - Secuencia #", secuencias[i].id, " (", tipoSecuencia, ") - CERRANDO TODAS LAS ÓRDENES");
+            
+            // Forzar cierre agresivo de todas las órdenes inmediatamente usando el modo rápido
+            CerrarTodasLasOrdenesDeSecuencia(i, true);
+            CerrarSecuencia(i);
+            
+            // Actualizar el estado de las secuencias cuando se cierra una
+            GuardarEstadoSecuencias();
+            
+            continue;
+        }
+        
+        // AQUÍ: Añadimos la llamada a nuestra nueva función Reiubicar TPs y la función de diagnosticar las secuencias.
+        ReubicarTPsParaGarantiaMinimaG(i);
+        DiagnosticarSecuencia(i); 
+
+        // Si no se alcanzó TP, verificar nuevas activaciones
+        if(!secuencias[i].tpAlcanzado)
+        {
+            VerificarNuevasActivaciones(i);
+        }
+        
+        // NUEVO: Verificar si se debe cerrar por número de entrada
+        VerificarCierrePorNumeroEntrada(i);
+        
+        // Verificar si necesitamos recrear la orden pendiente de Entrada #2
+        if(secuencias[i].entradaPendienteActiva && secuencias[i].secuenciaActual == 2)
+        {
+            RecrearOrdenEntrada2(i);
+        }
+    }
+    
+    // También buscar órdenes huérfanas (sin secuencia asociada)
+    LimpiarOrdenesHuerfanas();
+}
+
+//+------------------------------------------------------------------+
+//| Verificar si se debe cerrar la secuencia por número de entrada  |
+//+------------------------------------------------------------------+
+void VerificarCierrePorNumeroEntrada(int indiceSecuencia)
+{
+    // Verificar que la secuencia esté activa
+    if(!secuencias[indiceSecuencia].activa || secuencias[indiceSecuencia].tpAlcanzado)
+        return;
+    
+    // Obtener el valor del campo "# Cerrar"
+    string textoNumCerrar = ObjectGetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT);
+    
+    // Si el campo está vacío o es "0", no cerrar por número de entrada
+    if(textoNumCerrar == "" || textoNumCerrar == "0")
+        return;
+    
+    int numeroCerrar = (int)StringToInteger(textoNumCerrar);
+    
+    // Contar las posiciones activas de esta secuencia
+    string secPrefix = "SEC" + IntegerToString(secuencias[indiceSecuencia].id) + "_";
+    int posicionesActivas = 0;
+    int numeroEntradaMasAlta = 0;
+    
+    // Contar posiciones y encontrar el número de entrada más alto
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            posicionesActivas++;
+            
+            // Extraer el número de entrada del comentario
+            int posENT = StringFind(comentario, "_ENT");
+            if(posENT >= 0)
+            {
+                string numeroStr = StringSubstr(comentario, posENT + 4);
+                int numeroEntrada = (int)StringToInteger(numeroStr);
+                if(numeroEntrada > numeroEntradaMasAlta)
+                    numeroEntradaMasAlta = numeroEntrada;
+            }
+        }
+    }
+    
+    // También verificar en el historial reciente (últimos 10 segundos) por si la entrada se abrió y cerró rápidamente
+    datetime startTime = TimeCurrent() - 10;
+    if(HistorySelect(startTime, TimeCurrent()))
+    {
+        for(int i = 0; i < HistoryDealsTotal(); i++)
+        {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if(!HistoryDealSelect(dealTicket)) continue;
+            
+            string comentario = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                // Si es una operación de entrada (apertura)
+                if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
+                {
+                    int posENT = StringFind(comentario, "_ENT");
+                    if(posENT >= 0)
+                    {
+                        string numeroStr = StringSubstr(comentario, posENT + 4);
+                        int numeroEntrada = (int)StringToInteger(numeroStr);
+                        if(numeroEntrada > numeroEntradaMasAlta)
+                            numeroEntradaMasAlta = numeroEntrada;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Si se alcanzó o superó el número de entrada configurado, cerrar toda la secuencia
+    if(numeroEntradaMasAlta >= numeroCerrar)
+    {
+        string tipoSecuencia = secuencias[indiceSecuencia].esModoCompra ? "COMPRA" : "VENTA";
+        Print("🛑 CIERRE POR NÚMERO DE ENTRADA #", numeroCerrar, " ALCANZADO - Secuencia #", 
+              secuencias[indiceSecuencia].id, " (", tipoSecuencia, ") - CERRANDO TODAS LAS ÓRDENES");
+        
+        // Marcar para cierre
+        secuencias[indiceSecuencia].tpAlcanzado = true;
+        secuencias[indiceSecuencia].ultimoCierreIntentado = TimeCurrent();
+        
+        // Cerrar todas las órdenes de la secuencia
+        CerrarTodasLasOrdenesDeSecuencia(indiceSecuencia, true);
+        CerrarSecuencia(indiceSecuencia);
+        
+        // Actualizar el estado
+        GuardarEstadoSecuencias();
+        
+        Print("✅ Secuencia #", secuencias[indiceSecuencia].id, 
+              " cerrada por alcanzar entrada #", numeroCerrar);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Limpiar órdenes huérfanas (sin secuencia asociada)              |
+//+------------------------------------------------------------------+
+void LimpiarOrdenesHuerfanas()
+{
+    // Esta función se ejecuta menos frecuentemente
+    static datetime ultimaLimpieza = 0;
+    if(TimeCurrent() - ultimaLimpieza < 30) return; // Solo cada 30 segundos
+    
+    ultimaLimpieza = TimeCurrent();
+    
+    // Buscar órdenes pendientes con prefijo "SEC" pero sin secuencia activa
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(!OrderSelect(ticket)) continue;
+        
+        string comentario = OrderGetString(ORDER_COMMENT);
+        if(StringFind(comentario, "SEC") == 0)
+        {
+            // Extraer el ID de secuencia
+            int pos1 = StringFind(comentario, "SEC") + 3;
+            int pos2 = StringFind(comentario, "_", pos1);
+            if(pos2 == -1) continue;
+            
+            string idStr = StringSubstr(comentario, pos1, pos2 - pos1);
+            int secId = (int)StringToInteger(idStr);
+            
+            // Verificar si la secuencia está activa
+            bool secuenciaEncontrada = false;
+            for(int j = 0; j < 10; j++)
+            {
+                if(secuencias[j].activa && secuencias[j].id == secId)
+                {
+                    secuenciaEncontrada = true;
+                    break;
+                }
+            }
+            
+            // Si no se encontró una secuencia activa para esta orden, cerrarla
+            if(!secuenciaEncontrada)
+            {
+                Print("🧹 Eliminando orden huérfana #", ticket, " - Comentario: ", comentario);
+                trade.OrderDelete(ticket);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Función para resetear todas las secuencias (emergencia)          |
+//+------------------------------------------------------------------+
+void ResetearTodasLasSecuencias()
+{
+    Print("⚠️ REINICIO DE EMERGENCIA - Reseteando todas las secuencias");
+    
+    // Primero intenta cerrar todas las posiciones activas
+    CerrarTodasLasSecuencias();
+    
+    // Luego resetear el estado de todas las secuencias
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        ResetearSecuencia(i);
+    }
+    
+    // Resetear el contador y el ID
+    totalSecuencias = 0;
+    proximoIDSecuencia = 1;
+    
+    // Guardar el estado
+    GuardarEstadoSecuencias();
+    
+    Print("✅ Reinicio de emergencia completado - Todas las secuencias han sido reseteadas");
+}
+
+//+------------------------------------------------------------------+
+//| Función para resetear el contador de secuencias activas         |
+//+------------------------------------------------------------------+
+void RecalcularTotalSecuencias()
+{
+    int contador = 0;
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+            contador++;
+    }
+    
+    // Si el contador está inconsistente, arreglarlo
+    if(contador != totalSecuencias)
+    {
+        Print("⚠️ Corrigiendo contador de secuencias: de ", totalSecuencias, " a ", contador);
+        totalSecuencias = contador;
+        GuardarEstadoSecuencias();
+    }
+}
+//+------------------------------------------------------------------+
+//| Función para limpiar secuencias problemáticas                    |
+//+------------------------------------------------------------------+
+void LimpiarSecuenciasProblematicas()
+{
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+        {
+            // Verificar si hay actividad real (órdenes o posiciones) para esta secuencia
+            bool secuenciaValida = false;
+            string secPrefix = "SEC" + IntegerToString(secuencias[i].id) + "_";
+            
+            // Comprobar posiciones
+            for(int p = 0; p < PositionsTotal(); p++)
+            {
+                ulong ticket = PositionGetTicket(p);
+                if(!PositionSelectByTicket(ticket)) continue;
+                
+                string comentario = PositionGetString(POSITION_COMMENT);
+                if(StringFind(comentario, secPrefix) == 0)
+                {
+                    secuenciaValida = true;
+                    break;
+                }
+            }
+            
+            // Comprobar órdenes pendientes
+            if(!secuenciaValida)
+            {
+                for(int o = 0; o < OrdersTotal(); o++)
+                {
+                    ulong ticket = OrderGetTicket(o);
+                    if(!OrderSelect(ticket)) continue;
+                    
+                    string comentario = OrderGetString(ORDER_COMMENT);
+                    if(StringFind(comentario, secPrefix) == 0)
+                    {
+                        secuenciaValida = true;
+                        break;
+                    }
+                }
+            }
+            
+            // Si no encontramos órdenes ni posiciones, marcar como inactiva
+            if(!secuenciaValida)
+            {
+                // Verificar en el historial reciente si hubo operaciones
+                datetime startTime = TimeCurrent() - 300; // Últimos 5 minutos
+                bool existeEnHistorial = false;
+                
+                if(HistorySelect(startTime, TimeCurrent()))
+                {
+                    for(int h = 0; h < HistoryDealsTotal(); h++)
+                    {
+                        ulong dealTicket = HistoryDealGetTicket(h);
+                        if(!HistoryDealSelect(dealTicket)) continue;
+                        
+                        string comentario = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+                        if(StringFind(comentario, secPrefix) == 0)
+                        {
+                            existeEnHistorial = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if(!existeEnHistorial)
+                {
+                    Print("🧹 Limpiando secuencia #", secuencias[i].id, " - No se encontró actividad asociada");
+                    secuencias[i].activa = false;
+                    totalSecuencias--;
+                }
+            }
+        }
+    }
+    
+    // Guardar el estado actualizado
+    GuardarEstadoSecuencias();
+}
+
+//+------------------------------------------------------------------+
+//| Actualizar información de secuencias activas                     |
+//+------------------------------------------------------------------+
+void ActualizarInformacionSecuencias()
+{
+    // Eliminar la información anterior
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        string labelId = EA_OBJ_PREFIX + "SecInfo_" + IntegerToString(i);
+        string btnId = EA_OBJ_PREFIX + "BtnCerrarSec_" + IntegerToString(i);
+        
+        ObjectDelete(0, labelId);
+        ObjectDelete(0, btnId);
+    }
+    
+    // Posición inicial para la información
+    int baseX = 30;
+    int baseY = 230; // Ajustar según la posición del panel de información
+    int altoLinea = 20;
+    int anchoBoton = 25;
+    int margenBoton = 200;
+    
+    // Título
+    string tituloId = EA_OBJ_PREFIX + "SecInfoTitulo";
+    ObjectCreate(0, tituloId, OBJ_LABEL, 0, 0, 0);
+    ObjectSetInteger(0, tituloId, OBJPROP_XDISTANCE, baseX);
+    ObjectSetInteger(0, tituloId, OBJPROP_YDISTANCE, baseY);
+    ObjectSetString(0, tituloId, OBJPROP_TEXT, "Secuencias activas: " + IntegerToString(totalSecuencias));
+    ObjectSetInteger(0, tituloId, OBJPROP_COLOR, clrYellow);
+    ObjectSetInteger(0, tituloId, OBJPROP_FONTSIZE, 10);
+    
+    baseY += altoLinea + 5;
+    
+    // Mostrar secuencias activas
+    int contadorSecuenciasActivas = 0;
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+        {
+            string labelId = EA_OBJ_PREFIX + "SecInfo_" + IntegerToString(i);
+            string btnId = EA_OBJ_PREFIX + "BtnCerrarSec_" + IntegerToString(i);
+            string tipoSecuencia = secuencias[i].esModoCompra ? "COMPRA" : "VENTA";
+            
+            // Crear etiqueta con información de la secuencia
+            ObjectCreate(0, labelId, OBJ_LABEL, 0, 0, 0);
+            ObjectSetInteger(0, labelId, OBJPROP_XDISTANCE, baseX);
+            ObjectSetInteger(0, labelId, OBJPROP_YDISTANCE, baseY + contadorSecuenciasActivas * altoLinea);
+            ObjectSetString(0, labelId, OBJPROP_TEXT, "#" + IntegerToString(secuencias[i].id) + 
+                             " - " + tipoSecuencia + " - Fase: " + IntegerToString(secuencias[i].secuenciaActual));
+            ObjectSetInteger(0, labelId, OBJPROP_COLOR, secuencias[i].esModoCompra ? clrLime : clrRed);
+            ObjectSetInteger(0, labelId, OBJPROP_FONTSIZE, 9);
+            
+            // Crear botón para cerrar la secuencia
+            ObjectCreate(0, btnId, OBJ_BUTTON, 0, 0, 0);
+            ObjectSetInteger(0, btnId, OBJPROP_XDISTANCE, baseX + margenBoton);
+            ObjectSetInteger(0, btnId, OBJPROP_YDISTANCE, baseY + contadorSecuenciasActivas * altoLinea - 2);
+            ObjectSetInteger(0, btnId, OBJPROP_XSIZE, anchoBoton);
+            ObjectSetInteger(0, btnId, OBJPROP_YSIZE, 18);
+            ObjectSetString(0, btnId, OBJPROP_TEXT, "X");
+            ObjectSetInteger(0, btnId, OBJPROP_COLOR, clrWhite);
+            ObjectSetInteger(0, btnId, OBJPROP_BGCOLOR, clrMaroon);
+            ObjectSetInteger(0, btnId, OBJPROP_BORDER_COLOR, clrRed);
+            
+            contadorSecuenciasActivas++;
+        }
+    }
+    
+    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Función mejorada para verificar si una secuencia tiene órdenes      |
+//| pendientes evitando duplicados                                      |
+//+------------------------------------------------------------------+
+bool TieneOrdenesPendientes(int indice, bool &tieneMultiples)
+{
+    if(!secuencias[indice].activa) return false;
+    
+    string secPrefix = "SEC" + IntegerToString(secuencias[indice].id) + "_";
+    int contadorOrdenes = 0;
+    tieneMultiples = false;
+    
+    // Comprobar si hay órdenes pendientes para esta secuencia
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(!OrderSelect(ticket)) continue;
+        
+        string comentario = OrderGetString(ORDER_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            contadorOrdenes++;
+            if(contadorOrdenes > 1)
+            {
+                tieneMultiples = true;
+                break;
+            }
+        }
+    }
+    
+    return (contadorOrdenes > 0);
+}
+
+//+------------------------------------------------------------------+
+//| Nueva función para eliminar órdenes pendientes duplicadas         |
+//+------------------------------------------------------------------+
+void EliminarOrdenesPendientesDuplicadas(int indice)
+{
+    if(!secuencias[indice].activa) return;
+    
+    string secPrefix = "SEC" + IntegerToString(secuencias[indice].id) + "_";
+    string entradaActualPattern = "_ENT" + IntegerToString(secuencias[indice].secuenciaActual);
+    
+    // Preparar arrays para almacenar tickets de órdenes por tipo
+    int maxOrdenesPorTipo = 10; // Ajustar según sea necesario
+    ulong ticketsENT2[10];      // para órdenes de entrada 2
+    ulong ticketsEntradaActual[10]; // para órdenes de la entrada actual 
+    int contadorENT2 = 0;
+    int contadorEntradaActual = 0;
+    
+    // Buscar y clasificar todas las órdenes pendientes de la secuencia
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(!OrderSelect(ticket)) continue;
+        
+        string comentario = OrderGetString(ORDER_COMMENT);
+        
+        // Si pertenece a esta secuencia
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            // Verificar si es una orden ENT2
+            if(StringFind(comentario, "_ENT2") >= 0 && contadorENT2 < maxOrdenesPorTipo)
+            {
+                ticketsENT2[contadorENT2++] = ticket;
+            }
+            // Verificar si es una orden de la entrada actual
+            else if(StringFind(comentario, entradaActualPattern) >= 0 && contadorEntradaActual < maxOrdenesPorTipo)
+            {
+                ticketsEntradaActual[contadorEntradaActual++] = ticket;
+            }
+        }
+    }
+    
+    // Eliminar todas las órdenes ENT2 duplicadas excepto la primera (si hay más de una)
+    if(contadorENT2 > 1)
+    {
+        Print("🔄 Encontradas ", contadorENT2, " órdenes ENT2 duplicadas para secuencia #", secuencias[indice].id, " - Eliminando extras");
+        
+        // Solo conservar la primera orden, eliminar las demás
+        for(int i = 1; i < contadorENT2; i++)
+        {
+            if(OrderSelect(ticketsENT2[i]) && trade.OrderDelete(ticketsENT2[i]))
+            {
+                Print("✅ Eliminada orden ENT2 duplicada #", ticketsENT2[i], " para secuencia #", secuencias[indice].id);
+            }
+            else
+            {
+                Print("❌ Error al eliminar orden ENT2 duplicada #", ticketsENT2[i], ": ", GetLastError());
+            }
+        }
+        
+        // Actualizar el ticket de entrada2 con el ticket conservado
+        if(OrderSelect(ticketsENT2[0]))
+        {
+            secuencias[indice].ticketEntrada2 = ticketsENT2[0];
+            Print("📝 Actualizado ticket de entrada2 para secuencia #", secuencias[indice].id, " a: ", ticketsENT2[0]);
+        }
+    }
+    
+    // Eliminar todas las órdenes de la entrada actual duplicadas excepto la primera (si hay más de una)
+    if(contadorEntradaActual > 1)
+    {
+        Print("🔄 Encontradas ", contadorEntradaActual, " órdenes entrada actual duplicadas para secuencia #", 
+              secuencias[indice].id, " (Fase: ", secuencias[indice].secuenciaActual, ") - Eliminando extras");
+              // Solo conservar la primera orden, eliminar las demás
+        for(int i = 1; i < contadorEntradaActual; i++)
+        {
+            if(OrderSelect(ticketsEntradaActual[i]) && trade.OrderDelete(ticketsEntradaActual[i]))
+            {
+                Print("✅ Eliminada orden entrada duplicada #", ticketsEntradaActual[i], " para secuencia #", secuencias[indice].id);
+            }
+            else
+            {
+                Print("❌ Error al eliminar orden duplicada #", ticketsEntradaActual[i], ": ", GetLastError());
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calcular comisión de Pepperstone EUR/USD basada en volumen       |
+//+------------------------------------------------------------------+
+double CalcularComisionPepperstone(double volumen)
+{
+    // Tabla de comisiones Pepperstone EUR/USD (basada en datos proporcionados)
+    double comision = 0.0;
+    
+    if(volumen <= 0) return 0.0;
+    
+    // Para volúmenes pequeños, usar tabla exacta
+    if(volumen <= 0.01) comision = 0.06;
+    else if(volumen <= 0.02) comision = 0.1;
+    else if(volumen <= 0.03) comision = 0.16;
+    else if(volumen <= 0.04) comision = 0.2;
+    else if(volumen <= 0.05) comision = 0.26;
+    else if(volumen <= 0.06) comision = 0.32;
+    else if(volumen <= 0.07) comision = 0.38;  // CORREGIDO: era 0.36, debe ser 0.38
+    else if(volumen <= 0.08) comision = 0.42;
+    else if(volumen <= 0.09) comision = 0.46;
+    else if(volumen <= 0.10) comision = 0.52;
+    else if(volumen <= 0.11) comision = 0.58;  // NUEVO
+    else if(volumen <= 0.12) comision = 0.62;  // NUEVO
+    else if(volumen <= 0.13) comision = 0.68;  // NUEVO
+    else if(volumen <= 0.14) comision = 0.72;  // NUEVO
+    else if(volumen <= 0.15) comision = 0.78;  // NUEVO
+    else if(volumen <= 0.16) comision = 0.84;  // NUEVO
+    else if(volumen <= 0.17) comision = 0.88;  // NUEVO
+    else if(volumen <= 0.18) comision = 0.94;  // NUEVO
+    else if(volumen <= 0.19) comision = 0.98;  // NUEVO
+    else if(volumen <= 0.20) comision = 1.04;  // NUEVO
+    else if(volumen <= 0.30) comision = volumen * 5.2;  // Para 0.21 a 0.30
+    else
+    {
+        // Para volúmenes mayores, usar la fórmula exacta: 5.2 EUR por lote
+        comision = volumen * 5.2;
+    }
+    
+    return comision;
+}
+
+//+------------------------------------------------------------------+
+//| FUNCIÓN CORREGIDA PARA REUBICAR TPs CON GANANCIA EXACTA          |
+//| Mantiene la lógica iterativa original pero con precisión mejorada|
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Función auxiliar para calcular P&L total dado un precio TP      |
+//+------------------------------------------------------------------+
+double CalcularPLTotalConTP(int indiceSecuencia, double precioTP)
+{
+    double plTotal = 0;
+    string secPrefix = "SEC" + IntegerToString(secuencias[indiceSecuencia].id) + "_";
+    
+    // Obtener spread y valor pip
+    double spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double valorPipEUR = 10.0 / bid;
+    
+    // Recorrer todas las posiciones de la secuencia
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, secPrefix) != 0) continue;
+        
+        double lotes = PositionGetDouble(POSITION_VOLUME);
+        int tipo = (int)PositionGetInteger(POSITION_TYPE);
+        double precioApertura = PositionGetDouble(POSITION_PRICE_OPEN);
+        
+        double precioCierre = precioTP;
+        
+        // IMPORTANTE: Las posiciones SELL se cierran al ASK (precio + spread)
+        if(tipo == POSITION_TYPE_SELL)
+        {
+            precioCierre = precioTP + spread;
+        }
+        
+        // Calcular diferencia en pips
+        double diferenciaPips = 0;
+        if(tipo == POSITION_TYPE_BUY)
+        {
+            diferenciaPips = (precioCierre - precioApertura) / 0.0001;
+        }
+        else // SELL
+        {
+            diferenciaPips = (precioApertura - precioCierre) / 0.0001;
+        }
+        
+        // Convertir a EUR
+        plTotal += diferenciaPips * lotes * valorPipEUR;
+    }
+    
+    return plTotal;
+}
+
+//+------------------------------------------------------------------+
+//| Reubicar TPs para garantizar una ganancia EXACTA                |
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Reubicar TPs para garantizar una ganancia EXACTA                |
+//+------------------------------------------------------------------+
+void ReubicarTPsParaGarantiaMinimaG(int indiceSecuencia)
+{
+    // Verificar que la secuencia esté activa
+    if(!secuencias[indiceSecuencia].activa || secuencias[indiceSecuencia].tpAlcanzado)
+        return;
+        
+    // Obtener el número de entrada en el que se debe activar la reubicación
+    string textoNumEntrada = ObjectGetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT);
+    
+    // NUEVO: Si el campo está vacío o es "0", no activar la reubicación
+    if(textoNumEntrada == "" || textoNumEntrada == "0")
+    {
+        return; // No reubicar TPs si no hay valor o es 0
+    }
+    
+    int numeroEntradaActivacion = (int)StringToInteger(textoNumEntrada);
+    
+    // CONTAR posiciones REALES activadas
+    string secPrefix = "SEC" + IntegerToString(secuencias[indiceSecuencia].id) + "_";
+    int posicionesActivasReales = 0;
+    
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            posicionesActivasReales++;
+        }
+    }
+    
+    // Verificar condición de activación
+    if(posicionesActivasReales < numeroEntradaActivacion)
+        return;
+    
+    // Obtener la ganancia EXACTA deseada - VALIDACIÓN MEJORADA
+    string textoMinimaG = ObjectGetString(0, EA_OBJ_PREFIX + editMinimaGID, OBJPROP_TEXT);
+    double gananciaExacta = StringToDouble(textoMinimaG);
+    
+    Print("\n⚠️ VALIDACIÓN DE CONFIGURACIÓN:");
+    Print("   Texto en Minima G.: '", textoMinimaG, "'");
+    Print("   Valor interpretado: ", DoubleToString(gananciaExacta, 2), " EUR");
+    
+    if(gananciaExacta <= 0)
+    {
+        Print("❌ Ganancia inválida o cero");
+        return;
+    }
+    
+    Print("\n========== RECÁLCULO DE TPs PARA GANANCIA EXACTA ==========");
+    Print("🎯 Ganancia objetivo: ", DoubleToString(gananciaExacta, 2), " EUR");
+    Print("📊 Secuencia #", secuencias[indiceSecuencia].id, " - Posiciones activas: ", posicionesActivasReales);
+    
+    // Arrays para almacenar información
+    ulong ticketsPos[50];
+    double lotesPos[50];
+    int tiposPos[50];
+    double preciosAperturaPos[50];
+    string comentariosPos[50];
+    double tpActualPos[50];
+    int totalPosiciones = 0;
+    
+    int indiceEnt1 = -1;
+    int indiceEnt2 = -1;
+    
+    double totalComisiones = 0;
+    
+    // Recolectar todas las posiciones
+    Print("\n📋 POSICIONES ACTUALES:");
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            ticketsPos[totalPosiciones] = ticket;
+            lotesPos[totalPosiciones] = PositionGetDouble(POSITION_VOLUME);
+            tiposPos[totalPosiciones] = (int)PositionGetInteger(POSITION_TYPE);
+            preciosAperturaPos[totalPosiciones] = PositionGetDouble(POSITION_PRICE_OPEN);
+            tpActualPos[totalPosiciones] = PositionGetDouble(POSITION_TP);
+            comentariosPos[totalPosiciones] = comentario;
+            
+            // Acumular comisiones usando la función corregida
+            totalComisiones += CalcularComisionPepperstone(lotesPos[totalPosiciones]);
+            
+            // Identificar ENT1 y ENT2
+            if(StringFind(comentario, "ENT1") >= 0)
+            {
+                indiceEnt1 = totalPosiciones;
+            }
+            if(StringFind(comentario, "ENT2") >= 0)
+            {
+                indiceEnt2 = totalPosiciones;
+            }
+            
+            Print("  #", ticket, " ", comentario, " ",
+                  (tiposPos[totalPosiciones] == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                  " ", DoubleToString(lotesPos[totalPosiciones], 2), " @ ",
+                  DoubleToString(preciosAperturaPos[totalPosiciones], _Digits),
+                  " TP actual: ", DoubleToString(tpActualPos[totalPosiciones], _Digits));
+            
+            totalPosiciones++;
+        }
+    }
+    
+    if(totalPosiciones == 0 || (indiceEnt1 < 0 && indiceEnt2 < 0))
+    {
+        Print("❌ No se encontraron posiciones válidas o ENT1/ENT2");
+        return;
+    }
+    
+    Print("\n💸 Comisión total: ", DoubleToString(totalComisiones, 2), " EUR");
+    
+    // Obtener datos del mercado
+    double spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
+    double tasaEURUSD = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    
+    // Para EUR/USD con cuenta en EUR
+    double valorPorPipPorLote = 10.0 / tasaEURUSD;
+    
+    Print("📊 Spread actual: ", DoubleToString(spread/_Point, 1), " puntos");
+    Print("💱 EUR/USD: ", DoubleToString(tasaEURUSD, _Digits));
+    Print("💰 Valor pip/lote: ", DoubleToString(valorPorPipPorLote, 4), " EUR");
+    
+    // Ganancia objetivo incluyendo comisiones
+    double gananciaObjetivo = gananciaExacta + totalComisiones;
+    Print("🎯 Ganancia objetivo total (con comisiones): ", DoubleToString(gananciaObjetivo, 2), " EUR");
+    
+    // IMPORTANTE: Ajuste para múltiples entradas
+    // Con 3+ entradas, necesitamos ser más precisos con el cálculo del spread
+    
+    // Contar posiciones SELL para ajuste de spread
+    int totalSells = 0;
+    double totalLotesSell = 0;
+    for(int i = 0; i < totalPosiciones; i++)
+    {
+        if(tiposPos[i] == POSITION_TYPE_SELL)
+        {
+            totalSells++;
+            totalLotesSell += lotesPos[i];
+        }
+    }
+    
+    Print("📊 Total SELL: ", totalSells, " posiciones, ", DoubleToString(totalLotesSell, 2), " lotes");
+    
+    // Para TP1 (si existe ENT1)
+    if(indiceEnt1 >= 0)
+    {
+        Print("\n📐 CALCULANDO TP1 (ENT1 es ", (tiposPos[indiceEnt1] == POSITION_TYPE_BUY ? "BUY" : "SELL"), ")...");
+        
+        // Calcular el precio objetivo usando método directo
+        double sumaNumerador = gananciaObjetivo;
+        double sumaDenominador = 0;
+        
+        // Para cada posición, calcular su contribución
+        for(int i = 0; i < totalPosiciones; i++)
+        {
+            double factor = lotesPos[i] * 10000 * valorPorPipPorLote;
+            
+            if(tiposPos[i] == POSITION_TYPE_BUY)
+            {
+                // BUY: ganancia = (precioCierre - precioApertura) * factor
+                sumaDenominador += factor;
+                sumaNumerador += preciosAperturaPos[i] * factor;
+            }
+            else
+            {
+                // SELL: ganancia = (precioApertura - precioCierreConSpread) * factor
+                // precioCierreConSpread = precioCierre + spread
+                sumaDenominador -= factor;
+                sumaNumerador -= preciosAperturaPos[i] * factor;
+                sumaNumerador += spread * factor; // Ajuste por spread
+            }
+        }
+        
+        if(MathAbs(sumaDenominador) < 0.001)
+        {
+            Print("❌ No se puede calcular TP1 - denominador muy pequeño");
+        }
+        else
+        {
+            double nuevoTP1 = sumaNumerador / sumaDenominador;
+            nuevoTP1 = NormalizeDouble(nuevoTP1, _Digits);
+            
+            // Validar que el TP sea razonable
+            double precioActual = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            double distancia = MathAbs(nuevoTP1 - precioActual);
+            
+            if(distancia < 5 * _Point || distancia > 1000 * _Point)
+            {
+                Print("⚠️ TP1 calculado fuera de rango razonable: ", DoubleToString(nuevoTP1, _Digits));
+                Print("   Distancia: ", DoubleToString(distancia/_Point, 0), " puntos");
+            }
+            else
+            {
+                Print("✅ Nuevo TP1 calculado: ", DoubleToString(nuevoTP1, _Digits));
+                
+                // Verificar el cálculo
+                double verificacionPL = 0;
+                for(int i = 0; i < totalPosiciones; i++)
+                {
+                    double precioCierre = nuevoTP1;
+                    if(tiposPos[i] == POSITION_TYPE_SELL)
+                        precioCierre += spread; // SELL se cierra al ASK
+                    
+                    double pips = 0;
+                    if(tiposPos[i] == POSITION_TYPE_BUY)
+                        pips = (precioCierre - preciosAperturaPos[i]) / 0.0001;
+                    else
+                        pips = (preciosAperturaPos[i] - precioCierre) / 0.0001;
+                    
+                    double gananciaPos = pips * lotesPos[i] * valorPorPipPorLote;
+                    verificacionPL += gananciaPos;
+                }
+                
+                Print("📊 Verificación TP1:");
+                Print("   P&L bruto: ", DoubleToString(verificacionPL, 2), " EUR");
+                Print("   Comisiones: ", DoubleToString(totalComisiones, 2), " EUR");
+                Print("   P&L neto: ", DoubleToString(verificacionPL - totalComisiones, 2), " EUR");
+                Print("   Objetivo: ", DoubleToString(gananciaExacta, 2), " EUR");
+                Print("   Diferencia: ", DoubleToString((verificacionPL - totalComisiones) - gananciaExacta, 4), " EUR");
+                
+                // Modificar TP1
+                if(trade.PositionModify(ticketsPos[indiceEnt1], 0, nuevoTP1))
+                {
+                    Print("✅ TP1 modificado exitosamente");
+                    secuencias[indiceSecuencia].tp1Precio = nuevoTP1;
+                }
+                else
+                {
+                    Print("❌ Error al modificar TP1: ", GetLastError());
+                }
+            }
+        }
+    }
+    
+    // Para TP2 (mismo proceso)
+    if(indiceEnt2 >= 0)
+    {
+        Print("\n📐 CALCULANDO TP2 (ENT2 es ", (tiposPos[indiceEnt2] == POSITION_TYPE_BUY ? "BUY" : "SELL"), ")...");
+        
+        double sumaNumerador = gananciaObjetivo;
+        double sumaDenominador = 0;
+        
+        for(int i = 0; i < totalPosiciones; i++)
+        {
+            double factor = lotesPos[i] * 10000 * valorPorPipPorLote;
+            
+            if(tiposPos[i] == POSITION_TYPE_BUY)
+            {
+                sumaDenominador += factor;
+                sumaNumerador += preciosAperturaPos[i] * factor;
+            }
+            else
+            {
+                sumaDenominador -= factor;
+                sumaNumerador -= preciosAperturaPos[i] * factor;
+                sumaNumerador += spread * factor;
+            }
+        }
+        
+        if(MathAbs(sumaDenominador) < 0.001)
+        {
+            Print("❌ No se puede calcular TP2 - denominador muy pequeño");
+        }
+        else
+        {
+            double nuevoTP2 = sumaNumerador / sumaDenominador;
+            nuevoTP2 = NormalizeDouble(nuevoTP2, _Digits);
+            
+            double precioActual = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            double distancia = MathAbs(nuevoTP2 - precioActual);
+            
+            if(distancia < 5 * _Point || distancia > 1000 * _Point)
+            {
+                Print("⚠️ TP2 calculado fuera de rango razonable: ", DoubleToString(nuevoTP2, _Digits));
+            }
+            else
+            {
+                Print("✅ Nuevo TP2 calculado: ", DoubleToString(nuevoTP2, _Digits));
+                
+                // Verificar
+                double verificacionPL = 0;
+                for(int i = 0; i < totalPosiciones; i++)
+                {
+                    double precioCierre = nuevoTP2;
+                    if(tiposPos[i] == POSITION_TYPE_SELL)
+                        precioCierre += spread;
+                    
+                    double pips = 0;
+                    if(tiposPos[i] == POSITION_TYPE_BUY)
+                        pips = (precioCierre - preciosAperturaPos[i]) / 0.0001;
+                    else
+                        pips = (preciosAperturaPos[i] - precioCierre) / 0.0001;
+                    
+                    double gananciaPos = pips * lotesPos[i] * valorPorPipPorLote;
+                    verificacionPL += gananciaPos;
+                }
+                
+                Print("📊 Verificación TP2:");
+                Print("   P&L neto: ", DoubleToString(verificacionPL - totalComisiones, 2), " EUR");
+                Print("   Objetivo: ", DoubleToString(gananciaExacta, 2), " EUR");
+                
+                if(trade.PositionModify(ticketsPos[indiceEnt2], 0, nuevoTP2))
+                {
+                    Print("✅ TP2 modificado exitosamente");
+                    secuencias[indiceSecuencia].tp2Precio = nuevoTP2;
+                }
+            }
+        }
+    }
+    
+    GuardarEstadoSecuencias();
+    Print("========== FIN DE RECÁLCULO ==========\n");
+}
+
+//+------------------------------------------------------------------+
+//| Función de diagnóstico para verificar cálculos                   |
+//+------------------------------------------------------------------+
+void DiagnosticarSecuencia(int indiceSecuencia)
+{
+    if(!secuencias[indiceSecuencia].activa) return;
+    
+    string secPrefix = "SEC" + IntegerToString(secuencias[indiceSecuencia].id) + "_";
+    
+    Print("\n========== DIAGNÓSTICO SECUENCIA #", secuencias[indiceSecuencia].id, " ==========");
+    
+    // Recolectar todas las posiciones
+    double totalComisiones = 0;
+    double totalPL = 0;
+    int numPosiciones = 0;
+    
+    Print("POSICIONES ABIERTAS:");
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            double lotes = PositionGetDouble(POSITION_VOLUME);
+            double precioApertura = PositionGetDouble(POSITION_PRICE_OPEN);
+            double tp = PositionGetDouble(POSITION_TP);
+            double pl = PositionGetDouble(POSITION_PROFIT);
+            string tipo = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            
+            totalComisiones += CalcularComisionPepperstone(lotes);
+            totalPL += pl;
+            
+            Print("  #", ticket, " ", tipo, " ", DoubleToString(lotes, 2), 
+                  " @ ", DoubleToString(precioApertura, _Digits),
+                  " TP=", DoubleToString(tp, _Digits),
+                  " P/L=", DoubleToString(pl, 2));
+            
+            numPosiciones++;
+        }
+    }
+    
+    double gananciaActualNeta = totalPL - totalComisiones;
+    
+    Print("\nRESUMEN:");
+    Print("  Posiciones: ", numPosiciones);
+    Print("  P/L Bruto: ", DoubleToString(totalPL, 2), " EUR");
+    Print("  Comisiones: ", DoubleToString(totalComisiones, 2), " EUR");
+    Print("  P/L Neto: ", DoubleToString(gananciaActualNeta, 2), " EUR");
+    Print("  Ganancia objetivo: ", DoubleToString(StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editMinimaGID, OBJPROP_TEXT)), 2), " EUR");
+    
+    // Simular cierre a precio actual
+    double precioActual = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double plSimulado = 0;
+    
+    Print("\nSIMULACIÓN DE CIERRE AL PRECIO ACTUAL (", DoubleToString(precioActual, _Digits), "):");
+    
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            double lotes = PositionGetDouble(POSITION_VOLUME);
+            double precioApertura = PositionGetDouble(POSITION_PRICE_OPEN);
+            int tipo = (int)PositionGetInteger(POSITION_TYPE);
+            
+            double pips = 0;
+            if(tipo == POSITION_TYPE_BUY)
+                pips = (precioActual - precioApertura) / 0.0001;
+            else
+                pips = (precioApertura - precioActual) / 0.0001;
+            
+            double ganancia = pips * lotes * 10.0 / SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            plSimulado += ganancia;
+            
+            Print("  #", ticket, " ", (tipo == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                  " ", DoubleToString(lotes, 2), " = ", DoubleToString(ganancia, 2), " EUR");
+        }
+    }
+    
+    Print("\n  P/L Simulado Bruto: ", DoubleToString(plSimulado, 2), " EUR");
+    Print("  Comisiones: ", DoubleToString(totalComisiones, 2), " EUR");
+    Print("  P/L Simulado Neto: ", DoubleToString(plSimulado - totalComisiones, 2), " EUR");
+    Print("=====================================\n");
+}
+
+//+------------------------------------------------------------------+
+//| Función para limpiar secuencias fantasma silenciosamente         |
+//+------------------------------------------------------------------+
+void LimpiarSecuenciasFantasma()
+{
+    int contadorLimpiadas = 0;
+    
+    // Primero, recalcular el total para asegurar que es correcto
+    RecalcularTotalSecuencias();
+    
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+        {
+            // Verificar si hay actividad real (órdenes o posiciones) para esta secuencia
+            bool secuenciaValida = false;
+            string secPrefix = "SEC" + IntegerToString(secuencias[i].id) + "_";
+            
+            // Comprobar posiciones
+            for(int p = 0; p < PositionsTotal(); p++)
+            {
+                ulong ticket = PositionGetTicket(p);
+                if(!PositionSelectByTicket(ticket)) continue;
+                
+                string comentario = PositionGetString(POSITION_COMMENT);
+                if(StringFind(comentario, secPrefix) == 0)
+                {
+                    secuenciaValida = true;
+                    break;
+                }
+            }
+            
+            // Comprobar órdenes pendientes
+            if(!secuenciaValida)
+            {
+                for(int o = 0; o < OrdersTotal(); o++)
+                {
+                    ulong ticket = OrderGetTicket(o);
+                    if(!OrderSelect(ticket)) continue;
+                    
+                    string comentario = OrderGetString(ORDER_COMMENT);
+                    if(StringFind(comentario, secPrefix) == 0)
+                    {
+                        secuenciaValida = true;
+                        break;
+                    }
+                }
+            }
+            
+            // Si no encontramos órdenes ni posiciones, marcar como inactiva
+            if(!secuenciaValida)
+            {
+                // Verificar en el historial reciente si hubo operaciones
+                datetime startTime = TimeCurrent() - 300; // Últimos 5 minutos
+                bool existeEnHistorial = false;
+                
+                if(HistorySelect(startTime, TimeCurrent()))
+                {
+                    for(int h = 0; h < HistoryDealsTotal(); h++)
+                    {
+                        ulong dealTicket = HistoryDealGetTicket(h);
+                        if(!HistoryDealSelect(dealTicket)) continue;
+                        
+                        string comentario = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+                        if(StringFind(comentario, secPrefix) == 0)
+                        {
+                            existeEnHistorial = true;
+                            break;
+                        }
+                    }
+                }
+                
+                if(!existeEnHistorial)
+                {
+                    Print("🧹 Limpieza automática: Secuencia #", secuencias[i].id, " sin actividad detectada");
+                    secuencias[i].activa = false;
+                    totalSecuencias--;
+                    contadorLimpiadas++;
+                }
+            }
+        }
+    }
+    
+    if(contadorLimpiadas > 0)
+    {
+        Print("🧹 Limpiadas ", contadorLimpiadas, " secuencias fantasma. Total activas ahora: ", totalSecuencias);
+        GuardarEstadoSecuencias();
+    }
+}
+
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // Inicializar con ID 1, pero luego comprobar si hay que restaurar el contador
+    proximoIDSecuencia = 1;
+    
+    // Verificar si el trading está permitido
+    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+    {
+        Alert("El trading automático no está permitido en el terminal");
+        return INIT_FAILED;
+    }
+    
+    if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+    {
+        Alert("El trading con EAs no está permitido en esta cuenta");
+        return INIT_FAILED;
+    }
+    
+    trade.SetDeviationInPoints(10);
+    
+    // Inicializar la interfaz
+    CrearInterfaz();
+    
+    // Inicializar array de secuencias
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        ResetearSecuencia(i);
+    }
+    
+    // Nueva función: Restaurar las órdenes pendientes perdidas en cambios de timeframe
+    RecuperarOrdenesPendientes();
+    
+    // Habilitar eventos de gráfico para botones (ya están habilitados por defecto)
+    ChartRedraw(); // Aseguramos que el gráfico se redibuja para mostrar la interfaz
+    
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    // Guardar valores de los controles antes de destruirlos
+    GuardarValores();
+    
+    // Si la razón de deinicialización es cambio de temporalidad o cierre del gráfico,
+    // guardar el estado y el contador de secuencias
+    if(reason == REASON_CHARTCHANGE || reason == REASON_CHARTCLOSE)
+    {
+        // No eliminar los objetos, solo guardar el estado
+        Print("Cambio de temporalidad detectado - Preservando objetos y contador de secuencias");
+        
+        // Guardar estado e ID de próxima secuencia para mantener numeración
+        GuardarEstadoSecuenciasConID();
+        return;
+    }
+    
+    // Si se trata de eliminación del EA, limpiar todas las secuencias activas
+    // Y no preservar el contador (para que se reinicie la próxima vez)
+    if(reason == REASON_REMOVE)
+    {
+        Print("Eliminando EA - Cerrando todas las secuencias activas");
+        CerrarTodasLasSecuencias();
+        
+        // Borrar la variable global que guarda el próximo ID para forzar reinicio
+        GlobalVariableDel("EA_PROXIMO_ID_SECUENCIA_" + Symbol());
+    }
+    
+    // Para otras razones, eliminar solo los objetos del EA
+    ObjectsDeleteAll(0, EA_OBJ_PREFIX);
+    Print("EA deinicializado - Objetos del EA eliminados");
+}
+
+//+------------------------------------------------------------------+
+//| Guardar estado de secuencias incluyendo el próximo ID            |
+//+------------------------------------------------------------------+
+void GuardarEstadoSecuenciasConID()
+{
+    // Guardar el número total de secuencias activas
+    GlobalVariableSet("EA_TOTAL_SECUENCIAS_" + Symbol(), totalSecuencias);
+    
+    // Guardar el próximo ID de secuencia para mantener la numeración entre cambios de timeframe
+    GlobalVariableSet("EA_PROXIMO_ID_SECUENCIA_" + Symbol(), proximoIDSecuencia);
+    
+    // Guardar información detallada de cada secuencia activa
+    for(int i = 0; i < 20; i++)
+    {
+        if(secuencias[i].activa)
+        {
+            string baseKey = "EA_SEC_" + Symbol() + "_" + IntegerToString(i) + "_";
+            
+            GlobalVariableSet(baseKey + "ID", secuencias[i].id);
+            GlobalVariableSet(baseKey + "ACTIVA", 1);
+            GlobalVariableSet(baseKey + "PRECIO_E1", secuencias[i].precioEntrada1);
+            GlobalVariableSet(baseKey + "PRECIO_E2", secuencias[i].precioEntrada2);
+            GlobalVariableSet(baseKey + "TP1", secuencias[i].tp1Precio);
+            GlobalVariableSet(baseKey + "TP2", secuencias[i].tp2Precio);
+            GlobalVariableSet(baseKey + "SEQ_ACTUAL", secuencias[i].secuenciaActual);
+            GlobalVariableSet(baseKey + "ES_COMPRA", secuencias[i].esModoCompra ? 1 : 0);
+            GlobalVariableSet(baseKey + "TICKET_E1", secuencias[i].ticketEntrada1);
+            GlobalVariableSet(baseKey + "TICKET_E2", secuencias[i].ticketEntrada2);
+            GlobalVariableSet(baseKey + "PENDIENTE_ACTIVA", secuencias[i].entradaPendienteActiva ? 1 : 0);
+            GlobalVariableSet(baseKey + "CERRADA_MANUAL", secuencias[i].cerradaManualmente ? 1 : 0);
+            GlobalVariableSet(baseKey + "TP_REUBICADO", secuencias[i].tpReubicado ? 1 : 0);
+            
+            Print("Guardado estado de secuencia #", secuencias[i].id, " para persistencia entre timeframes");
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Guardar estado básico de secuencias sin ID                       |
+//+------------------------------------------------------------------+
+void GuardarEstadoSecuencias()
+{
+    // Guardar el número total de secuencias activas
+    GlobalVariableSet("EA_TOTAL_SECUENCIAS_" + Symbol(), totalSecuencias);
+    
+    // Guardar información detallada de cada secuencia activa
+    for(int i = 0; i < 20; i++)
+    {
+        if(secuencias[i].activa)
+        {
+            string baseKey = "EA_SEC_" + Symbol() + "_" + IntegerToString(i) + "_";
+            
+            GlobalVariableSet(baseKey + "ID", secuencias[i].id);
+            GlobalVariableSet(baseKey + "ACTIVA", 1);
+            GlobalVariableSet(baseKey + "PRECIO_E1", secuencias[i].precioEntrada1);
+            GlobalVariableSet(baseKey + "PRECIO_E2", secuencias[i].precioEntrada2);
+            GlobalVariableSet(baseKey + "TP1", secuencias[i].tp1Precio);
+            GlobalVariableSet(baseKey + "TP2", secuencias[i].tp2Precio);
+            GlobalVariableSet(baseKey + "SEQ_ACTUAL", secuencias[i].secuenciaActual);
+            GlobalVariableSet(baseKey + "ES_COMPRA", secuencias[i].esModoCompra ? 1 : 0);
+            GlobalVariableSet(baseKey + "TICKET_E1", secuencias[i].ticketEntrada1);
+            GlobalVariableSet(baseKey + "TICKET_E2", secuencias[i].ticketEntrada2);
+            GlobalVariableSet(baseKey + "PENDIENTE_ACTIVA", secuencias[i].entradaPendienteActiva ? 1 : 0);
+            GlobalVariableSet(baseKey + "CERRADA_MANUAL", secuencias[i].cerradaManualmente ? 1 : 0);
+            GlobalVariableSet(baseKey + "TP_REUBICADO", secuencias[i].tpReubicado ? 1 : 0); // AÑADIR ESTA LÍNEA
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Restaurar estado de las secuencias                               |
+//+------------------------------------------------------------------+
+void RestaurarEstadoSecuencias()
+{
+    // Verificar si hay secuencias guardadas
+    if(!GlobalVariableCheck("EA_TOTAL_SECUENCIAS_" + Symbol()))
+        return;
+        
+    int totalSecuenciasGuardadas = (int)GlobalVariableGet("EA_TOTAL_SECUENCIAS_" + Symbol());
+    
+    // Restaurar el próximo ID de secuencia solo si fue un cambio de temporalidad
+    // (Comprobamos si la variable existe y si hay secuencias que restaurar)
+    if(GlobalVariableCheck("EA_PROXIMO_ID_SECUENCIA_" + Symbol()) && totalSecuenciasGuardadas > 0)
+    {
+        proximoIDSecuencia = (int)GlobalVariableGet("EA_PROXIMO_ID_SECUENCIA_" + Symbol());
+        Print("Restaurado contador de IDs de secuencia desde cambio de temporalidad: ", proximoIDSecuencia);
+    }
+    
+    if(totalSecuenciasGuardadas <= 0)
+        return;
+        
+    Print("Restaurando ", totalSecuenciasGuardadas, " secuencias guardadas");
+    
+    // Restaurar información de cada secuencia guardada
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        string baseKey = "EA_SEC_" + Symbol() + "_" + IntegerToString(i) + "_";
+        
+        // Verificar si esta secuencia estaba activa
+        if(GlobalVariableCheck(baseKey + "ACTIVA") && GlobalVariableGet(baseKey + "ACTIVA") == 1)
+        {
+            secuencias[i].id = (int)GlobalVariableGet(baseKey + "ID");
+            secuencias[i].activa = true;
+            secuencias[i].precioEntrada1 = GlobalVariableGet(baseKey + "PRECIO_E1");
+            secuencias[i].precioEntrada2 = GlobalVariableGet(baseKey + "PRECIO_E2");
+            secuencias[i].tp1Precio = GlobalVariableGet(baseKey + "TP1");
+            secuencias[i].tp2Precio = GlobalVariableGet(baseKey + "TP2");
+            secuencias[i].secuenciaActual = (int)GlobalVariableGet(baseKey + "SEQ_ACTUAL");
+            secuencias[i].esModoCompra = (GlobalVariableGet(baseKey + "ES_COMPRA") == 1);
+            secuencias[i].ticketEntrada1 = (ulong)GlobalVariableGet(baseKey + "TICKET_E1");
+            secuencias[i].ticketEntrada2 = (ulong)GlobalVariableGet(baseKey + "TICKET_E2");
+            secuencias[i].entradaPendienteActiva = (GlobalVariableGet(baseKey + "PENDIENTE_ACTIVA") == 1);
+            secuencias[i].cerradaManualmente = GlobalVariableCheck(baseKey + "CERRADA_MANUAL") ? 
+                                              (GlobalVariableGet(baseKey + "CERRADA_MANUAL") == 1) : false;
+            secuencias[i].tiempoInicio = TimeCurrent();
+            secuencias[i].ultimaRecreacionPendiente = 0; // Forzar verificación inmediata
+            secuencias[i].ultimaVerificacionPendientes = 0; // Inicializar nueva variable
+            secuencias[i].sinOrdenesPendientesDetectado = false; // Inicializar nueva variable
+            
+            // Actualizar proximoIDSecuencia para asegurar que nuevas secuencias tengan IDs únicos
+            if(secuencias[i].id >= proximoIDSecuencia)
+            {
+                proximoIDSecuencia = secuencias[i].id + 1;
+                Print("Ajustando ID de próxima secuencia a: ", proximoIDSecuencia);
+            }
+            
+            totalSecuencias++;
+            
+            Print("Restaurada secuencia #", secuencias[i].id, " - Modo: ", 
+                  secuencias[i].esModoCompra ? "COMPRA" : "VENTA", 
+                  ", Entrada2 pendiente: ", secuencias[i].entradaPendienteActiva ? "Sí" : "No",
+                  ", Cerrada manualmente: ", secuencias[i].cerradaManualmente ? "Sí" : "No");
+        }
+    }
+    
+    for(int i = 0; i < 20; i++)
+    {
+        string baseKey = "EA_SEC_" + Symbol() + "_" + IntegerToString(i) + "_";
+        
+        if(GlobalVariableCheck(baseKey + "ACTIVA") && GlobalVariableGet(baseKey + "ACTIVA") == 1)
+        {
+            // Restauración existente...
+            secuencias[i].tpReubicado = GlobalVariableCheck(baseKey + "TP_REUBICADO") ? 
+                                       (GlobalVariableGet(baseKey + "TP_REUBICADO") == 1) : false;
+        }
+    }
+    
+}
+
+//+------------------------------------------------------------------+
+//| Guardar valores de los controles                                 |
+//+------------------------------------------------------------------+
+void GuardarValores()
+{
+    if(ObjectFind(0, EA_OBJ_PREFIX + editLotajeID) >= 0)
+        LotajeInicial = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT));
+        
+    if(ObjectFind(0, EA_OBJ_PREFIX + editTP1ID) >= 0)
+        TP1Puntos = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editTP1ID, OBJPROP_TEXT));
+        
+    if(ObjectFind(0, EA_OBJ_PREFIX + editPipsEntrada2ID) >= 0)
+        PipsEntrada2 = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editPipsEntrada2ID, OBJPROP_TEXT));
+        
+    if(ObjectFind(0, EA_OBJ_PREFIX + editTP2ID) >= 0)
+        TP2Puntos = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editTP2ID, OBJPROP_TEXT));
+        
+    if(ObjectFind(0, EA_OBJ_PREFIX + editNumEntradaID) >= 0)
+    {
+        string texto = ObjectGetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT);
+        if(texto == "" || texto == "0")
+            NumEntrada = 0;
+        else
+            NumEntrada = (int)StringToInteger(texto);
+    }
+        
+    if(ObjectFind(0, EA_OBJ_PREFIX + editMinimaGID) >= 0)
+        MinimaG = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editMinimaGID, OBJPROP_TEXT));
+        
+    if(ObjectFind(0, EA_OBJ_PREFIX + editNumCerrarID) >= 0)
+    {
+        string texto = ObjectGetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT);
+        if(texto == "" || texto == "0")
+            NumCerrar = 0;
+        else
+            NumCerrar = (int)StringToInteger(texto);
+    }
+        
+    // Guardar estos valores en variables globales para persistencia entre timeframes
+    GlobalVariableSet("EA_LOTAJE_" + Symbol(), LotajeInicial);
+    GlobalVariableSet("EA_TP1_" + Symbol(), TP1Puntos);
+    GlobalVariableSet("EA_PIPS_E2_" + Symbol(), PipsEntrada2);
+    GlobalVariableSet("EA_TP2_" + Symbol(), TP2Puntos);
+    GlobalVariableSet("EA_NUM_ENTRADA_" + Symbol(), NumEntrada);
+    GlobalVariableSet("EA_MINIMA_G_" + Symbol(), MinimaG);
+    GlobalVariableSet("EA_NUM_CERRAR_" + Symbol(), NumCerrar);
+}
+
+//+------------------------------------------------------------------+
+//| Restaurar valores guardados                                      |
+//+------------------------------------------------------------------+
+void RestaurarValores()
+{
+    // Solo restaurar valores si los controles no tienen valores ya
+    if(ObjectFind(0, EA_OBJ_PREFIX + editLotajeID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT);
+        if(textoActual == "" || textoActual == "0" || textoActual == "0.00")
+        {
+            // Intentar recuperar desde variables globales solo si el campo está vacío
+            if(GlobalVariableCheck("EA_LOTAJE_" + Symbol()))
+                LotajeInicial = GlobalVariableGet("EA_LOTAJE_" + Symbol());
+                
+            ObjectSetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT, DoubleToString(LotajeInicial, 2));
+        }
+        else
+        {
+            // Si hay texto ya en el campo, usarlo para actualizar la variable
+            LotajeInicial = StringToDouble(textoActual);
+        }
+    }
+    
+    if(ObjectFind(0, EA_OBJ_PREFIX + editTP1ID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editTP1ID, OBJPROP_TEXT);
+        if(textoActual == "" || textoActual == "0")
+        {
+            if(GlobalVariableCheck("EA_TP1_" + Symbol()))
+                TP1Puntos = (int)GlobalVariableGet("EA_TP1_" + Symbol());
+                
+            ObjectSetString(0, EA_OBJ_PREFIX + editTP1ID, OBJPROP_TEXT, IntegerToString(TP1Puntos));
+        }
+        else
+        {
+            TP1Puntos = (int)StringToInteger(textoActual);
+        }
+    }
+    
+    if(ObjectFind(0, EA_OBJ_PREFIX + editPipsEntrada2ID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editPipsEntrada2ID, OBJPROP_TEXT);
+        if(textoActual == "" || textoActual == "0")
+        {
+            if(GlobalVariableCheck("EA_PIPS_E2_" + Symbol()))
+                PipsEntrada2 = (int)GlobalVariableGet("EA_PIPS_E2_" + Symbol());
+                
+            ObjectSetString(0, EA_OBJ_PREFIX + editPipsEntrada2ID, OBJPROP_TEXT, IntegerToString(PipsEntrada2));
+        }
+        else
+        {
+            PipsEntrada2 = (int)StringToInteger(textoActual);
+        }
+    }
+    
+    if(ObjectFind(0, EA_OBJ_PREFIX + editTP2ID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editTP2ID, OBJPROP_TEXT);
+        if(textoActual == "" || textoActual == "0")
+        {
+            if(GlobalVariableCheck("EA_TP2_" + Symbol()))
+                TP2Puntos = (int)GlobalVariableGet("EA_TP2_" + Symbol());
+                
+            ObjectSetString(0, EA_OBJ_PREFIX + editTP2ID, OBJPROP_TEXT, IntegerToString(TP2Puntos));
+        }
+        else
+        {
+            TP2Puntos = (int)StringToInteger(textoActual);
+        }
+    }
+    
+    if(ObjectFind(0, EA_OBJ_PREFIX + editNumEntradaID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT);
+        if(textoActual == "")
+        {
+            if(GlobalVariableCheck("EA_NUM_ENTRADA_" + Symbol()))
+            {
+                NumEntrada = (int)GlobalVariableGet("EA_NUM_ENTRADA_" + Symbol());
+                // Si es 0, mostrar campo vacío
+                if(NumEntrada == 0)
+                    ObjectSetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT, "");
+                else
+                    ObjectSetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT, IntegerToString(NumEntrada));
+            }
+            else
+            {
+                // Si no hay valor guardado, dejar vacío
+                ObjectSetString(0, EA_OBJ_PREFIX + editNumEntradaID, OBJPROP_TEXT, "");
+            }
+        }
+        else
+        {
+            NumEntrada = (int)StringToInteger(textoActual);
+        }
+    }
+    
+    // Restaurar valor para Minima G.
+    if(ObjectFind(0, EA_OBJ_PREFIX + editMinimaGID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editMinimaGID, OBJPROP_TEXT);
+        if(textoActual == "" || textoActual == "0" || textoActual == "0.00")
+        {
+            if(GlobalVariableCheck("EA_MINIMA_G_" + Symbol()))
+                MinimaG = GlobalVariableGet("EA_MINIMA_G_" + Symbol());
+                
+            ObjectSetString(0, EA_OBJ_PREFIX + editMinimaGID, OBJPROP_TEXT, DoubleToString(MinimaG, 2));
+        }
+        else
+        {
+            MinimaG = StringToDouble(textoActual);
+        }
+    }
+    
+    // Restaurar valor para # Cerrar (NUEVO)
+    if(ObjectFind(0, EA_OBJ_PREFIX + editNumCerrarID) >= 0)
+    {
+        string textoActual = ObjectGetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT);
+        if(textoActual == "")
+        {
+            if(GlobalVariableCheck("EA_NUM_CERRAR_" + Symbol()))
+            {
+                NumCerrar = (int)GlobalVariableGet("EA_NUM_CERRAR_" + Symbol());
+                // Si es 0, mostrar campo vacío
+                if(NumCerrar == 0)
+                    ObjectSetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT, "");
+                else
+                    ObjectSetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT, IntegerToString(NumCerrar));
+            }
+            else
+            {
+                // Si no hay valor guardado, dejar vacío
+                ObjectSetString(0, EA_OBJ_PREFIX + editNumCerrarID, OBJPROP_TEXT, "");
+            }
+        }
+        else
+        {
+            NumCerrar = (int)StringToInteger(textoActual);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Resetear una secuencia                                           |
+//+------------------------------------------------------------------+
+void ResetearSecuencia(int indice)
+{
+    secuencias[indice].activa = false;
+    secuencias[indice].numOrdenes = 0;
+    secuencias[indice].tpAlcanzado = false;
+    secuencias[indice].ultimaVerificacionTP = 0;
+    secuencias[indice].cerradaCompletamente = false;
+    secuencias[indice].intentosCierre = 0;
+    secuencias[indice].ultimoCierreIntentado = 0;
+    secuencias[indice].esModoCompra = true;
+    secuencias[indice].ticketEntrada1 = 0;
+    secuencias[indice].ticketEntrada2 = 0;
+    secuencias[indice].entradaPendienteActiva = false;
+    secuencias[indice].ultimaRecreacionPendiente = 0;
+    secuencias[indice].cerradaManualmente = false;
+    secuencias[indice].ultimaVerificacionPendientes = 0; // Nueva variable
+    secuencias[indice].sinOrdenesPendientesDetectado = false; // Nueva variable
+    secuencias[indice].tpReubicado = false;
+    
+    // Limpiar array de órdenes
+    for(int i = 0; i < 10; i++)
+    {
+        secuencias[indice].ultimasOrdenes[i] = 0;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Verificar existencia de una orden pendiente                      |
+//+------------------------------------------------------------------+
+bool VerificarExistenciaOrdenPendiente(ulong ticket)
+{
+    if(ticket == 0) return false;
+    
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ordenTicket = OrderGetTicket(i);
+        if(ordenTicket == ticket && OrderSelect(ordenTicket))
+        {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Versión mejorada de recrear orden entrada #2 para evitar duplicados|
+//+------------------------------------------------------------------+
+bool RecrearOrdenEntrada2(int indice)
+{
+    if(!secuencias[indice].activa || secuencias[indice].tpAlcanzado) 
+        return false;
+    
+    // Si la orden fue cerrada manualmente, no la recreamos
+    if(secuencias[indice].cerradaManualmente)
+    {
+        Print("🚫 No se recrea orden pendiente ENTRADA #2 para secuencia #", secuencias[indice].id, " porque fue cerrada manualmente");
+        return false;
+    }
+    
+    // Verificar si ya existen órdenes pendientes para esta secuencia y eliminar duplicados
+    bool tieneMultiples = false;
+    bool tieneOrdenPendiente = TieneOrdenesPendientes(indice, tieneMultiples);
+    
+    // Si hay múltiples órdenes pendientes, limpiar las duplicadas
+    if(tieneMultiples)
+    {
+        Print("⚠️ Detectadas órdenes pendientes duplicadas para secuencia #", secuencias[indice].id, " - Limpiando");
+        EliminarOrdenesPendientesDuplicadas(indice);
+    }
+
+    // Verificar si la orden pendiente de Entrada #2 específica existe
+    if(VerificarExistenciaOrdenPendiente(secuencias[indice].ticketEntrada2))
+    {
+        secuencias[indice].entradaPendienteActiva = true;
+        return true; // La orden ya existe, no necesita recreación
+    }
+    
+    // Si ya hay alguna orden pendiente de esta secuencia pero no es la ENT2 específica,
+    // vamos a verificar si hay otra orden ENT2 con otro ticket
+    if(tieneOrdenPendiente)
+    {
+        string secPrefix = "SEC" + IntegerToString(secuencias[indice].id) + "_ENT2";
+        
+        for(int i = 0; i < OrdersTotal(); i++)
+        {
+            ulong ticket = OrderGetTicket(i);
+            if(!OrderSelect(ticket)) continue;
+            
+            string comentario = OrderGetString(ORDER_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                // Encontramos una orden ENT2 diferente a la que teníamos registrada
+                secuencias[indice].ticketEntrada2 = ticket;
+                secuencias[indice].entradaPendienteActiva = true;
+                Print("📝 Actualizado ticket de entrada2 para secuencia #", secuencias[indice].id, " a: ", ticket);
+                return true;
+            }
+        }
+    }
+    // Evitar recreaciones demasiado frecuentes (máximo una vez cada 5 segundos)
+    if(TimeCurrent() - secuencias[indice].ultimaRecreacionPendiente < 5)
+        return false;
+    
+    secuencias[indice].ultimaRecreacionPendiente = TimeCurrent();
+    
+    // Solo recrear si estamos en la fase inicial (secuenciaActual <= 2)
+    // y la entrada pendiente está marcada como activa
+    if(secuencias[indice].secuenciaActual <= 2 && secuencias[indice].entradaPendienteActiva)
+    {
+        string comentarioBase = "SEC" + IntegerToString(secuencias[indice].id) + "_";
+        string comentarioEnt2 = comentarioBase + "ENT2";
+        double lotaje = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT)) * 2;
+        ulong resultTicket = 0;
+        
+        Print("🔄 Recreando orden pendiente ENTRADA #2 para secuencia #", secuencias[indice].id);
+        
+        if(secuencias[indice].esModoCompra)
+        {
+            // ENTRADA #2: SELL STOP
+            trade.SellStop(lotaje, secuencias[indice].precioEntrada2, _Symbol, 0, secuencias[indice].tp2Precio, ORDER_TIME_GTC, 0, comentarioEnt2);
+            resultTicket = trade.ResultOrder();
+        }
+        else
+        {
+            // ENTRADA #2: BUY STOP
+            trade.BuyStop(lotaje, secuencias[indice].precioEntrada2, _Symbol, 0, secuencias[indice].tp2Precio, ORDER_TIME_GTC, 0, comentarioEnt2);
+            resultTicket = trade.ResultOrder();
+        }
+        
+        if(resultTicket > 0)
+        {
+            secuencias[indice].ticketEntrada2 = resultTicket;
+            RegistrarOrden(indice, resultTicket, comentarioEnt2);
+            Print("✅ Orden pendiente ENTRADA #2 recreada exitosamente con ticket #", resultTicket);
+            return true;
+        }
+        else
+        {
+            Print("❌ Error al recrear orden pendiente ENTRADA #2: ", GetLastError());
+            return false;
+        }
+    }
+    
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Función para recuperar órdenes pendientes perdidas - mejorada    |
+//+------------------------------------------------------------------+
+void RecuperarOrdenesPendientes()
+{
+    // Primero limpiar posibles duplicados en todas las secuencias
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+        {
+            bool tieneMultiples = false;
+            bool tieneOrdenPendiente = TieneOrdenesPendientes(i, tieneMultiples);
+            
+            if(tieneMultiples)
+            {
+                Print("🧹 Limpiando órdenes duplicadas para secuencia #", secuencias[i].id, " durante recuperación");
+                EliminarOrdenesPendientesDuplicadas(i);
+            }
+        }
+    }
+    
+    // Ahora recrear órdenes pendientes si es necesario
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa && secuencias[i].entradaPendienteActiva)
+        {
+            RecrearOrdenEntrada2(i);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Función modificada para verificar periódicamente órdenes pendientes |
+//+------------------------------------------------------------------+
+void VerificarOrdenesPendientes()
+{
+    // Limitar la frecuencia de verificación (cada 5 segundos)
+    datetime tiempoActual = TimeCurrent();
+    if(tiempoActual - ultimaVerificacionPendientes < 5)
+        return;
+        
+    ultimaVerificacionPendientes = tiempoActual;
+    
+    // Recorrer todas las secuencias activas
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa && secuencias[i].entradaPendienteActiva && !secuencias[i].cerradaManualmente)
+        {
+            // Verificar si hay órdenes pendientes duplicadas
+            bool tieneMultiples = false;
+            bool tieneOrdenPendiente = TieneOrdenesPendientes(i, tieneMultiples);
+            
+            // Si hay múltiples órdenes pendientes, limpiar las duplicadas
+            if(tieneMultiples)
+            {
+                Print("⚠️ Detectadas órdenes pendientes duplicadas para secuencia #", secuencias[i].id, " - Limpiando");
+                EliminarOrdenesPendientesDuplicadas(i);
+            }
+            
+            // Verificar si la orden pendiente Entrada #2 sigue existiendo
+            if(!VerificarExistenciaOrdenPendiente(secuencias[i].ticketEntrada2) && !tieneOrdenPendiente)
+            {
+                // Si no existe, intentar recrearla
+                Print("📢 Orden pendiente ENTRADA #2 no encontrada para secuencia #", secuencias[i].id, " - Intentando recrear");
+                RecrearOrdenEntrada2(i);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Función mejorada para verificar si hay secuencias sin órdenes    |
+//| pendientes y que tienen posiciones abiertas para cerrarlas       |
+//+------------------------------------------------------------------+
+void VerificarCierrePorFaltaDePendientes()
+{
+    datetime tiempoActual = TimeCurrent();
+    
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        // Solo procesar secuencias activas que no están ya marcadas para cierre
+        if(!secuencias[i].activa || secuencias[i].tpAlcanzado) 
+            continue;
+            
+        // Limitar frecuencia de verificación para cada secuencia (reducido de 10 a 2 segundos)
+        if(tiempoActual - secuencias[i].ultimaVerificacionPendientes < 2)
+            continue;
+            
+        secuencias[i].ultimaVerificacionPendientes = tiempoActual;
+        
+        // Si ya se detectó que no hay órdenes pendientes, no verificar de nuevo
+        if(secuencias[i].sinOrdenesPendientesDetectado)
+            continue;
+            
+        // Verificar si hay posiciones abiertas para esta secuencia
+        bool tienePositionesAbiertas = false;
+        string secPrefix = "SEC" + IntegerToString(secuencias[i].id) + "_";
+        
+        for(int p = 0; p < PositionsTotal(); p++)
+        {
+            ulong ticket = PositionGetTicket(p);
+            if(!PositionSelectByTicket(ticket)) continue;
+            
+            string comentario = PositionGetString(POSITION_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                tienePositionesAbiertas = true;
+                break;
+            }
+        }
+        
+        // Si no tiene posiciones abiertas, no hay nada que hacer
+        if(!tienePositionesAbiertas)
+            continue;
+        
+        // Verificar si hay órdenes pendientes para esta secuencia
+        bool tieneMultiples = false;
+        bool tienePendientes = TieneOrdenesPendientes(i, tieneMultiples);
+        
+        // Si hay múltiples órdenes pendientes, limpiar duplicados primero
+        if(tieneMultiples)
+        {
+            Print("⚠️ Detectadas órdenes duplicadas para secuencia #", secuencias[i].id, " durante verificación de falta de pendientes");
+            EliminarOrdenesPendientesDuplicadas(i);
+            tienePendientes = true; // Aún queda al menos una después de la limpieza
+        }
+        
+        // Verificar si hubo una activación reciente (tiempo de gracia para evitar cierres prematuros)
+        bool activacionReciente = false;
+        
+        // Verificar historial reciente para detectar activaciones en los últimos 10 segundos
+        datetime startTime = TimeCurrent() - 10; // Últimos 10 segundos como tiempo de gracia
+        if(HistorySelect(startTime, TimeCurrent()))
+        {
+            for(int h = 0; h < HistoryDealsTotal(); h++)
+            {
+                ulong dealTicket = HistoryDealGetTicket(h);
+                if(!HistoryDealSelect(dealTicket)) continue;
+                
+                string comentario = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+                if(StringFind(comentario, secPrefix) == 0)
+                {
+                    // Verificar si es una operación de entrada (podría ser una activación reciente)
+                    if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
+                    {
+                        activacionReciente = true;
+                        Print("🕒 Activación reciente detectada en secuencia #", secuencias[i].id, " - Dando tiempo para programar siguiente orden");
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Si no hay órdenes pendientes, no hay activación reciente, y sí hay posiciones abiertas, cerrar la secuencia
+        if(!tienePendientes && !activacionReciente && tienePositionesAbiertas)
+        {
+            // Marcar que se ha detectado la ausencia de órdenes pendientes
+            secuencias[i].sinOrdenesPendientesDetectado = true;
+            
+            Print("⚠️ SECUENCIA #", secuencias[i].id, " SIN ÓRDENES PENDIENTES DETECTADA - Cerrando todas las posiciones");
+            
+            // Llamar a la función de cierre con un flag para cierre rápido
+            CerrarTodasLasOrdenesDeSecuencia(i, true);
+            
+            // Si se logró cerrar todas las posiciones, marcar la secuencia como inactiva
+            if(secuencias[i].cerradaCompletamente)
+            {
+                secuencias[i].activa = false;
+                totalSecuencias--;
+                Print("✅ Secuencia #", secuencias[i].id, " cerrada correctamente por falta de órdenes pendientes");
+            }
+            else
+            {
+                // Si no se cerró completamente, continuar intentando en los siguientes ticks
+                secuencias[i].tpAlcanzado = true; // Usar este flag para forzar cierre en OnTick
+                secuencias[i].ultimoCierreIntentado = TimeCurrent();
+                Print("⚠️ Cierre parcial de Secuencia #", secuencias[i].id, " - Continuando intentos");
+            }
+            
+            // Guardar el estado actualizado
+            GuardarEstadoSecuencias();
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Crear panel principal de la interfaz                             |
+//+------------------------------------------------------------------+
+void CrearPanelPrincipal(int x, int y, int ancho, int alto)
+{
+    string fullId = EA_OBJ_PREFIX + panelPrincipalID;
+    
+    // Crear panel de fondo
+    if(ObjectFind(0, fullId) < 0) {
+        ObjectCreate(0, fullId, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+    }
+    
+    // Configurar propiedades
+    ObjectSetInteger(0, fullId, OBJPROP_XDISTANCE, x);
+    ObjectSetInteger(0, fullId, OBJPROP_YDISTANCE, y);
+    ObjectSetInteger(0, fullId, OBJPROP_XSIZE, ancho);
+    ObjectSetInteger(0, fullId, OBJPROP_YSIZE, alto);
+    ObjectSetInteger(0, fullId, OBJPROP_BGCOLOR, clrBlack);
+    ObjectSetInteger(0, fullId, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+    ObjectSetInteger(0, fullId, OBJPROP_BORDER_COLOR, clrWhite);
+    ObjectSetInteger(0, fullId, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+    ObjectSetInteger(0, fullId, OBJPROP_WIDTH, 1);
+    ObjectSetInteger(0, fullId, OBJPROP_BACK, false);
+    ObjectSetInteger(0, fullId, OBJPROP_SELECTABLE, false); // No seleccionable
+    ObjectSetInteger(0, fullId, OBJPROP_SELECTED, false);
+    ObjectSetInteger(0, fullId, OBJPROP_HIDDEN, true);
+    ObjectSetInteger(0, fullId, OBJPROP_ZORDER, 0);
+}
+
+//+------------------------------------------------------------------+
+//| Crear interfaz gráfica                                           |
+//+------------------------------------------------------------------+
+void CrearInterfaz()
+{
+    // Comprobar si la interfaz ya existe antes de crearla de nuevo
+    if(ObjectFind(0, EA_OBJ_PREFIX + botonCompraID) >= 0 && 
+       ObjectFind(0, EA_OBJ_PREFIX + botonVentaID) >= 0) {
+        Print("Interfaz ya existe, omitiendo creación");
+        interfazCreada = true;
+        RestaurarValores();
+        
+        // Nuevo: Restaurar estado de secuencias si existen
+        RestaurarEstadoSecuencias();
+        return;
+    }
+    
+    // No eliminar todos los objetos, sólo los pertenecientes al EA
+    ObjectsDeleteAll(0, EA_OBJ_PREFIX);
+    
+    // Definir dimensiones del panel y componentes
+    int x = 20;
+    int y = 20;
+    int anchoBotones = 120;
+    int altoBoton = 30;
+    int anchoPanel = anchoBotones * 2 + 20; // Reducido el espaciado
+    int altoPanel = 320; // Aumentado para incluir el nuevo campo # Cerrar
+    int espaciado = 10;
+    int margenX = 10; // Reducido el margen
+    int margenY = 10;
+    
+    // Crear panel principal
+    CrearPanelPrincipal(x, y, anchoPanel, altoPanel);
+    
+    // Ajustar posiciones para estar dentro del panel
+    x += margenX;
+    y += margenY;
+    
+    // Crear controles dentro del panel
+    // CAMBIO 1: Botones con posiciones intercambiadas
+    CrearBoton(botonVentaID, "VENTA", x, y, anchoBotones, altoBoton, clrRed); // VENTA a la izquierda
+    CrearBoton(botonCompraID, "COMPRA", x + anchoBotones + espaciado - 10, y, anchoBotones, altoBoton, clrGreen); // COMPRA a la derecha
+    y += altoBoton + espaciado;
+
+    // CAMBIO 2: Campo "Lote inicial" (antes "Lote entrada #1")
+    CrearCampoEdicionEstilizado(editLotajeID, "Lote inicial", x, y, anchoBotones * 2, altoBoton, DoubleToString(LotajeInicial, 2));
+    y += altoBoton + espaciado;
+
+    // CAMBIO 3 y 4: Campos TP E1 y TP E2 juntos
+    CrearCampoEdicionEstilizado(editTP1ID, "TP E1", x, y, anchoBotones * 2, altoBoton, IntegerToString(TP1Puntos));
+    y += altoBoton + espaciado;
+    
+    CrearCampoEdicionEstilizado(editTP2ID, "TP E2", x, y, anchoBotones * 2, altoBoton, IntegerToString(TP2Puntos));
+    y += altoBoton + espaciado;
+    
+    // CAMBIO 5: Campo "Dist. E1/E2" (antes "Entrada #2")
+    CrearCampoEdicionEstilizado(editPipsEntrada2ID, "Dist. E1/E2", x, y, anchoBotones * 2, altoBoton, IntegerToString(PipsEntrada2));
+    y += altoBoton + espaciado;
+    
+    // CAMBIO 6: Campo "Ganancia M." (antes "Minima G.")
+    CrearCampoEdicionEstilizado(editMinimaGID, "Ganancia M.", x, y, anchoBotones * 2, altoBoton, DoubleToString(MinimaG, 2));
+    y += altoBoton + espaciado;
+    
+    // CAMBIO 7: Campo "# Reubicar" (antes "No. Entrada")
+    CrearCampoEdicionEstilizado(editNumEntradaID, "# Reubicar", x, y, anchoBotones * 2, altoBoton, NumEntrada == 0 ? "" : IntegerToString(NumEntrada));
+    y += altoBoton + espaciado;
+    
+    // CAMBIO 8: Nuevo campo "# Cerrar"
+    CrearCampoEdicionEstilizado(editNumCerrarID, "# Cerrar", x, y, anchoBotones * 2, altoBoton, NumCerrar == 0 ? "" : IntegerToString(NumCerrar));
+    
+    // Restaurar valores después de crear los objetos
+    RestaurarValores();
+    
+    // Nuevo: Restaurar estado de secuencias si existen
+    RestaurarEstadoSecuencias();
+    
+    interfazCreada = true;
+    ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Crear campos de edición                                          |
+//+------------------------------------------------------------------+
+void CrearCampoEdicion(string id, string label, int x, int y, int ancho, int alto, string valor)
+{
+    string labelId = EA_OBJ_PREFIX + "Label" + id;
+    string fullId = EA_OBJ_PREFIX + id;
+    
+    ObjectCreate(0, labelId, OBJ_LABEL, 0, 0, 0);
+    ObjectSetInteger(0, labelId, OBJPROP_XDISTANCE, x);
+    ObjectSetInteger(0, labelId, OBJPROP_YDISTANCE, y + 3);
+    ObjectSetString(0, labelId, OBJPROP_TEXT, label);
+    ObjectSetInteger(0, labelId, OBJPROP_COLOR, clrBlack);
+
+    ObjectCreate(0, fullId, OBJ_EDIT, 0, 0, 0);
+    ObjectSetInteger(0, fullId, OBJPROP_XDISTANCE, x + 100);
+    ObjectSetInteger(0, fullId, OBJPROP_YDISTANCE, y);
+    ObjectSetInteger(0, fullId, OBJPROP_XSIZE, ancho);
+    ObjectSetInteger(0, fullId, OBJPROP_YSIZE, alto);
+    ObjectSetString(0, fullId, OBJPROP_TEXT, valor);
+    ObjectSetInteger(0, fullId, OBJPROP_ALIGN, ALIGN_LEFT);
+}
+//+------------------------------------------------------------------+
+//| Crear campos de edición estilizados (fondo negro, texto claro)   |
+//+------------------------------------------------------------------+
+void CrearCampoEdicionEstilizado(string id, string label, int x, int y, int ancho, int alto, string valor)
+{
+    string labelId = EA_OBJ_PREFIX + "Label" + id;
+    string fullId = EA_OBJ_PREFIX + id;
+    
+    // Crear etiqueta
+    ObjectCreate(0, labelId, OBJ_LABEL, 0, 0, 0);
+    ObjectSetInteger(0, labelId, OBJPROP_XDISTANCE, x);
+    ObjectSetInteger(0, labelId, OBJPROP_YDISTANCE, y + 5);
+    ObjectSetString(0, labelId, OBJPROP_TEXT, label);
+    ObjectSetInteger(0, labelId, OBJPROP_COLOR, clrWhite);
+    ObjectSetInteger(0, labelId, OBJPROP_FONTSIZE, 8);
+    ObjectSetInteger(0, labelId, OBJPROP_SELECTABLE, false); // No seleccionable
+    
+    // Crear campo de edición
+    ObjectCreate(0, fullId, OBJ_EDIT, 0, 0, 0);
+    ObjectSetInteger(0, fullId, OBJPROP_XDISTANCE, x + 100);
+    ObjectSetInteger(0, fullId, OBJPROP_YDISTANCE, y);
+    ObjectSetInteger(0, fullId, OBJPROP_XSIZE, ancho - 100);
+    ObjectSetInteger(0, fullId, OBJPROP_YSIZE, alto);
+    ObjectSetString(0, fullId, OBJPROP_TEXT, valor);
+    ObjectSetInteger(0, fullId, OBJPROP_ALIGN, ALIGN_CENTER);
+    ObjectSetInteger(0, fullId, OBJPROP_BGCOLOR, clrBlack);
+    ObjectSetInteger(0, fullId, OBJPROP_COLOR, clrWhite);
+    ObjectSetInteger(0, fullId, OBJPROP_BORDER_COLOR, clrRed);
+    ObjectSetInteger(0, fullId, OBJPROP_SELECTABLE, false); // No seleccionable
+    ObjectSetInteger(0, fullId, OBJPROP_READONLY, false);   // Asegurar que se pueda editar
+}
+
+//+------------------------------------------------------------------+
+//| Crear botones                                                    |
+//+------------------------------------------------------------------+
+void CrearBoton(string id, string texto, int x, int y, int ancho, int alto, color bgColor)
+{
+    string fullId = EA_OBJ_PREFIX + id;
+    
+    ObjectCreate(0, fullId, OBJ_BUTTON, 0, 0, 0);
+    ObjectSetInteger(0, fullId, OBJPROP_XDISTANCE, x);
+    ObjectSetInteger(0, fullId, OBJPROP_YDISTANCE, y);
+    ObjectSetInteger(0, fullId, OBJPROP_XSIZE, ancho);
+    ObjectSetInteger(0, fullId, OBJPROP_YSIZE, alto);
+    ObjectSetString(0, fullId, OBJPROP_TEXT, texto);
+    ObjectSetInteger(0, fullId, OBJPROP_COLOR, clrWhite);
+    ObjectSetInteger(0, fullId, OBJPROP_BGCOLOR, bgColor);
+    ObjectSetInteger(0, fullId, OBJPROP_BORDER_COLOR, clrBlack);
+    ObjectSetInteger(0, fullId, OBJPROP_STATE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Registrar orden en secuencia                                     |
+//+------------------------------------------------------------------+
+void RegistrarOrden(int indice, ulong ticket, string comentario="")
+{
+    if(indice < 0 || indice >= 10 || !secuencias[indice].activa) return;
+    
+    // Si el array está lleno, desplazar hacia abajo
+    if(secuencias[indice].numOrdenes >= 10)
+    {
+        for(int i = 0; i < 9; i++)
+        {
+            secuencias[indice].ultimasOrdenes[i] = secuencias[indice].ultimasOrdenes[i+1];
+        }
+        secuencias[indice].ultimasOrdenes[9] = ticket;
+    }
+    else
+    {
+        secuencias[indice].ultimasOrdenes[secuencias[indice].numOrdenes] = ticket;
+        secuencias[indice].numOrdenes++;
+    }
+    
+    // Guardar los tickets de entrada 1 y 2 específicamente
+    if(comentario != "")
+    {
+        if(StringFind(comentario, "ENT1") >= 0 || 
+           StringFind(PositionGetString(POSITION_COMMENT), "ENT1") >= 0 ||
+           StringFind(OrderGetString(ORDER_COMMENT), "ENT1") >= 0)
+        {
+            secuencias[indice].ticketEntrada1 = ticket;
+            Print("📝 Registrada ENTRADA #1 con ticket #", ticket, " para secuencia #", secuencias[indice].id);
+        }
+        else if(StringFind(comentario, "ENT2") >= 0 || 
+                StringFind(PositionGetString(POSITION_COMMENT), "ENT2") >= 0 ||
+                StringFind(OrderGetString(ORDER_COMMENT), "ENT2") >= 0)
+        {
+            secuencias[indice].ticketEntrada2 = ticket;
+            secuencias[indice].entradaPendienteActiva = true; // Marcar que hay una entrada pendiente activa
+            Print("📝 Registrada ENTRADA #2 con ticket #", ticket, " para secuencia #", secuencias[indice].id);
+        }
+    }
+    
+    Print("Orden #", ticket, " registrada en secuencia #", secuencias[indice].id);
+}
+
+//+------------------------------------------------------------------+
+//| Iniciar secuencia de compra                                      |
+//+------------------------------------------------------------------+
+void IniciarSecuenciaCompra()
+{
+    IniciarSecuencia(true); // true = modo compra
+}
+
+//+------------------------------------------------------------------+
+//| Iniciar secuencia de venta                                       |
+//+------------------------------------------------------------------+
+void IniciarSecuenciaVenta()
+{
+    IniciarSecuencia(false); // false = modo venta
+}
+
+//+------------------------------------------------------------------+
+//| Cerrar todas las secuencias                                      |
+//+------------------------------------------------------------------+
+void CerrarTodasLasSecuencias()
+{
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(secuencias[i].activa)
+        {
+            Print("🚩 Iniciando cierre de secuencia #", secuencias[i].id);
+            CerrarSecuencia(i);
+            Sleep(200); // Pausa entre cierres de secuencias
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Cerrar todas las órdenes de una secuencia                        |
+//+------------------------------------------------------------------+
+void CerrarTodasLasOrdenesDeSecuencia(int indice, bool cierreRapido = false)
+{
+    if(!secuencias[indice].activa) return;
+    
+    string secPrefix = "SEC" + IntegerToString(secuencias[indice].id) + "_";
+    bool errorEnCierre = false;
+    
+    // Configurar slippage para cierres rápidos
+    if(cierreRapido) {
+        // Guardar la desviación actual
+        int slippage_original = 10; // Valor predeterminado
+        
+        // Aumentar el slippage para cierre rápido
+        trade.SetDeviationInPoints(50);
+        Print("⚡ Modo cierre rápido activado para secuencia #", secuencias[indice].id, " - Slippage aumentado");
+    }
+    
+    // 1. Guardar todos los tickets de órdenes primero para intentar cerrarlos después
+    int numPosiciones = 0;
+    ulong posicionesTickets[50];  // Array para guardar tickets de posiciones
+    int numOrdenes = 0;
+    ulong ordenesTickets[50];     // Array para guardar tickets de órdenes pendientes
+    
+    // Obtener todos los tickets de posiciones abiertas de esta secuencia
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            posicionesTickets[numPosiciones++] = ticket;
+        }
+    }
+    
+    // Obtener todos los tickets de órdenes pendientes de esta secuencia
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(!OrderSelect(ticket)) continue;
+        
+        string comentario = OrderGetString(ORDER_COMMENT);
+        if(StringFind(comentario, secPrefix) == 0)
+        {
+            ordenesTickets[numOrdenes++] = ticket;
+        }
+    }
+    
+    // Añadir las órdenes específicas de entrada 1 y 2 si están registradas
+    if(secuencias[indice].ticketEntrada1 > 0)
+    {
+        bool encontrado = false;
+        for(int i = 0; i < numOrdenes; i++)
+        {
+            if(ordenesTickets[i] == secuencias[indice].ticketEntrada1)
+            {
+                encontrado = true;
+                break;
+            }
+        }
+        if(!encontrado)
+        {
+            ordenesTickets[numOrdenes++] = secuencias[indice].ticketEntrada1;
+            Print("👁️ Añadida ENTRADA #1 específica ticket #", secuencias[indice].ticketEntrada1, " a la lista para cierre");
+        }
+    }
+    
+    if(secuencias[indice].ticketEntrada2 > 0)
+    {
+        bool encontrado = false;
+        for(int i = 0; i < numOrdenes; i++)
+        {
+            if(ordenesTickets[i] == secuencias[indice].ticketEntrada2)
+            {
+                encontrado = true;
+                break;
+            }
+        }
+        if(!encontrado)
+        {
+            ordenesTickets[numOrdenes++] = secuencias[indice].ticketEntrada2;
+            Print("👁️ Añadida ENTRADA #2 específica ticket #", secuencias[indice].ticketEntrada2, " a la lista para cierre");
+        }
+    }
+    // 2. Eliminar todas las órdenes pendientes primero (para evitar que se activen durante el cierre)
+    for(int i = 0; i < numOrdenes; i++)
+    {
+        ulong ticket = ordenesTickets[i];
+        if(!OrderSelect(ticket)) continue;
+        
+        Print("🔵 Eliminando orden pendiente #", ticket, " de secuencia #", secuencias[indice].id);
+        if(!trade.OrderDelete(ticket))
+        {
+            Print("❌ Error al eliminar orden #", ticket, ": ", GetLastError());
+            errorEnCierre = true;
+        }
+        else
+        {
+            Print("✅ Orden #", ticket, " eliminada exitosamente");
+        }
+        
+        // Pausa más corta en modo rápido
+        if(cierreRapido)
+            Sleep(10); // Pausa muy breve
+        else
+            Sleep(50); // Pausa estándar
+    }
+    
+    // 3. Cerrar todas las posiciones abiertas
+    for(int i = 0; i < numPosiciones; i++)
+    {
+        ulong ticket = posicionesTickets[i];
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        Print("🔴 Cerrando posición #", ticket, " de secuencia #", secuencias[indice].id);
+        if(!trade.PositionClose(ticket))
+        {
+            Print("❌ Error al cerrar posición #", ticket, ": ", GetLastError());
+            errorEnCierre = true;
+        }
+        else
+        {
+            Print("✅ Posición #", ticket, " cerrada exitosamente");
+        }
+        
+        // Pausa más corta en modo rápido
+        if(cierreRapido)
+            Sleep(10); // Pausa muy breve
+        else
+            Sleep(50); // Pausa estándar
+    }
+    
+    // Si hubo errores, un segundo intento más agresivo
+    if(errorEnCierre)
+    {
+        // Pausa más corta en modo rápido
+        if(cierreRapido)
+            Sleep(50); // Pausa breve
+        else
+            Sleep(200); // Pausa estándar
+        
+        // Segundo intento para órdenes pendientes
+        for(int i = 0; i < OrdersTotal(); i++)
+        {
+            ulong ticket = OrderGetTicket(i);
+            if(!OrderSelect(ticket)) continue;
+            
+            string comentario = OrderGetString(ORDER_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                trade.OrderDelete(ticket);
+                if(cierreRapido)
+                    Sleep(5);
+                else
+                    Sleep(50);
+            }
+        }
+        
+        // Segundo intento de cierre de posiciones
+        for(int i = 0; i < PositionsTotal(); i++)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(!PositionSelectByTicket(ticket)) continue;
+            
+            string comentario = PositionGetString(POSITION_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                trade.PositionClose(ticket);
+                if(cierreRapido)
+                    Sleep(5);
+                else
+                    Sleep(50);
+            }
+        }
+    }
+    
+    // Verificación final
+    bool quedanOrdenes = false;
+    
+    // Verificar si quedan órdenes pendientes
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(OrderSelect(ticket))
+        {
+            string comentario = OrderGetString(ORDER_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                quedanOrdenes = true;
+                trade.OrderDelete(ticket); // Último intento
+            }
+        }
+    }
+    
+    // Verificar si quedan posiciones abiertas
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(PositionSelectByTicket(ticket))
+        {
+            string comentario = PositionGetString(POSITION_COMMENT);
+            if(StringFind(comentario, secPrefix) == 0)
+            {
+                quedanOrdenes = true;
+                trade.PositionClose(ticket); // Último intento
+            }
+        }
+    }
+    
+    // Restaurar slippage original si se modificó
+    if(cierreRapido) {
+        trade.SetDeviationInPoints(10); // Restaurar al valor predeterminado
+    }
+    
+    if(!quedanOrdenes)
+    {
+        secuencias[indice].cerradaCompletamente = true;
+        Print("✅ Secuencia #", secuencias[indice].id, " cerrada completamente");
+    }
+    else if(cierreRapido)
+    {
+        // En modo rápido, intentar un cierre agresivo con retardos mínimos
+        Print("⚡ Realizando último intento de cierre agresivo para secuencia #", secuencias[indice].id);
+        
+        // Cerrar todas las posiciones restantes con máxima prioridad
+        for(int i = 0; i < PositionsTotal(); i++)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(PositionSelectByTicket(ticket))
+            {
+                string comentario = PositionGetString(POSITION_COMMENT);
+                if(StringFind(comentario, secPrefix) == 0)
+                {
+                    trade.SetDeviationInPoints(100); // Máximo slippage para forzar cierre
+                    trade.PositionClose(ticket);
+                    trade.SetDeviationInPoints(10); // Restaurar al valor predeterminado
+                }
+            }
+        }
+        
+        // Verificar una última vez
+        quedanOrdenes = false;
+        for(int i = 0; i < PositionsTotal(); i++)
+        {
+            ulong ticket = PositionGetTicket(i);
+            if(PositionSelectByTicket(ticket))
+            {
+                string comentario = PositionGetString(POSITION_COMMENT);
+                if(StringFind(comentario, secPrefix) == 0)
+                {
+                    quedanOrdenes = true;
+                    break;
+                }
+            }
+        }
+        
+        if(!quedanOrdenes)
+        {
+            secuencias[indice].cerradaCompletamente = true;
+            Print("✅ Secuencia #", secuencias[indice].id, " cerrada completamente después de intento agresivo");
+        }
+    }
+}
+//+------------------------------------------------------------------+
+//| Cerrar una secuencia                                             |
+//+------------------------------------------------------------------+
+void CerrarSecuencia(int indice)
+{
+    if(!secuencias[indice].activa) return;
+    
+    string tipoSecuencia = secuencias[indice].esModoCompra ? "COMPRA" : "VENTA";
+    Print("🚩 Cerrando secuencia #", secuencias[indice].id, " (", tipoSecuencia, ")");
+    
+    // Usar cierre rápido para acelerar el proceso
+    CerrarTodasLasOrdenesDeSecuencia(indice, true);
+    
+    // Si se logró cerrar completamente
+    if(secuencias[indice].cerradaCompletamente)
+    {
+        secuencias[indice].activa = false;
+        secuencias[indice].entradaPendienteActiva = false;
+        totalSecuencias--;
+        Print("🏁 Secuencia #", secuencias[indice].id, " (", tipoSecuencia, ") finalizada y marcada como inactiva");
+    }
+    else
+    {
+        // Si no se cerró completamente, mantener activa pero marcar TP
+        secuencias[indice].tpAlcanzado = true;
+        secuencias[indice].intentosCierre++;
+        secuencias[indice].ultimoCierreIntentado = TimeCurrent();
+        Print("⚠️ Secuencia #", secuencias[indice].id, " pendiente de cierre completo - Intentos: ", secuencias[indice].intentosCierre);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Verificar nuevas activaciones                                     |
+//+------------------------------------------------------------------+
+void VerificarNuevasActivaciones(int indice)
+{
+    if(!secuencias[indice].activa || secuencias[indice].tpAlcanzado) return;
+    
+    string comentarioBase = "SEC" + IntegerToString(secuencias[indice].id) + "_ENT" + IntegerToString(secuencias[indice].secuenciaActual);
+    bool ordenActivada = false;
+    
+    // Verificar posiciones abiertas
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(!PositionSelectByTicket(ticket)) continue;
+        
+        string comentario = PositionGetString(POSITION_COMMENT);
+        if(StringFind(comentario, comentarioBase) >= 0)
+        {
+            ordenActivada = true;
+            break;
+        }
+    }
+    
+    // Verificar historial reciente si no se encontró en posiciones activas
+    if(!ordenActivada)
+    {
+        datetime startTime = TimeCurrent() - 300; // 5 minutos
+        if(HistorySelect(startTime, TimeCurrent()))
+        {
+            for(int i = 0; i < HistoryDealsTotal(); i++)
+            {
+                ulong dealTicket = HistoryDealGetTicket(i);
+                if(!HistoryDealSelect(dealTicket)) continue;
+                
+                string comentario = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+                if(StringFind(comentario, comentarioBase) >= 0)
+                {
+                    // Si es una operación de apertura
+                    if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_IN)
+                    {
+                        ordenActivada = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Si se activó una orden y no hay TP alcanzado, programar siguiente
+    if(ordenActivada && !secuencias[indice].tpAlcanzado)
+    {
+        // Si es ENTRADA #2, marcar como inactiva para evitar recreaciones
+        if(secuencias[indice].secuenciaActual == 2)
+        {
+            secuencias[indice].entradaPendienteActiva = false;
+            Print("⚙️ ENTRADA #2 activada - Desactivando flag de recreación");
+        }
+        
+        ProgramarSiguienteEntrada(indice);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Versión mejorada de Programar Siguiente Entrada para garantizar  |
+//| precios iguales y solo TP en entradas 1 y 2                      |
+//+------------------------------------------------------------------+
+void ProgramarSiguienteEntrada(int indice)
+{
+    if(!secuencias[indice].activa || secuencias[indice].tpAlcanzado) return;
+
+    // Verificar si ya existen órdenes pendientes para esta secuencia y eliminar duplicados
+    bool tieneMultiples = false;
+    bool tieneOrdenPendiente = TieneOrdenesPendientes(indice, tieneMultiples);
+    
+    // Si hay múltiples órdenes pendientes, limpiar las duplicadas
+    if(tieneMultiples)
+    {
+        Print("⚠️ Verificando órdenes duplicadas antes de programar siguiente entrada para secuencia #", secuencias[indice].id);
+        EliminarOrdenesPendientesDuplicadas(indice);
+    }
+
+    double lotajeBase = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT));
+    
+    secuencias[indice].secuenciaActual++;
+    double lotaje = lotajeBase * MathPow(2, secuencias[indice].secuenciaActual - 1);
+
+    // Validar que el lotaje no exceda el máximo permitido
+    double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    if(lotaje > maxVolume)
+    {
+        Print("Advertencia: Lotaje calculado excede el máximo permitido. Usando máximo volumen permitido.");
+        lotaje = maxVolume;
+    }
+
+    string comentarioBase = "SEC" + IntegerToString(secuencias[indice].id) + "_ENT" + IntegerToString(secuencias[indice].secuenciaActual);
+    ulong resultTicket = 0;
+    
+    // Verificar si ya existe una orden con este comentario específico
+    for(int i = 0; i < OrdersTotal(); i++)
+    {
+        ulong ticket = OrderGetTicket(i);
+        if(!OrderSelect(ticket)) continue;
+        
+        string comentario = OrderGetString(ORDER_COMMENT);
+        if(StringFind(comentario, comentarioBase) == 0)
+        {
+            Print("⚠️ Ya existe una orden con comentario ", comentarioBase, " - No se creará una nueva");
+            return; // Ya existe, no crear una nueva
+        }
+    }
+    
+    bool esImpar = secuencias[indice].secuenciaActual % 2 == 1;
+    
+    // Intentar colocar la orden SIEMPRE a los mismos precios que las entradas 1 y 2 originales
+    // Las entradas posteriores ya no tendrán TP para simplificar la gestión
+    if(secuencias[indice].esModoCompra)
+    {
+        // En modo COMPRA: 
+        // - Entradas impares: BUY STOP al precio de ENTRADA #1
+        // - Entradas pares: SELL STOP al precio de ENTRADA #2
+        if(esImpar)
+        {
+            // IMPORTANTE: Usamos el precio exacto de ENTRADA #1
+            // Sin TP en entradas posteriores a la #1 y #2
+            trade.BuyStop(lotaje, secuencias[indice].precioEntrada1, _Symbol, 0, 0, ORDER_TIME_GTC, 0, comentarioBase);
+            Print("📝 Programando BUY STOP (", comentarioBase, ") al precio exacto de ENTRADA #1: ", 
+                 NormalizeDouble(secuencias[indice].precioEntrada1, _Digits));
+        }
+        else
+        {
+            // IMPORTANTE: Usamos el precio exacto de ENTRADA #2
+            // Sin TP en entradas posteriores a la #1 y #2
+            trade.SellStop(lotaje, secuencias[indice].precioEntrada2, _Symbol, 0, 0, ORDER_TIME_GTC, 0, comentarioBase);
+            Print("📝 Programando SELL STOP (", comentarioBase, ") al precio exacto de ENTRADA #2: ", 
+                 NormalizeDouble(secuencias[indice].precioEntrada2, _Digits));
+        }
+    }
+    else
+    {
+        // En modo VENTA: 
+        // - Entradas impares: SELL STOP al precio de ENTRADA #1
+        // - Entradas pares: BUY STOP al precio de ENTRADA #2
+        if(esImpar)
+        {
+            // IMPORTANTE: Usamos el precio exacto de ENTRADA #1
+            // Sin TP en entradas posteriores a la #1 y #2
+            trade.SellStop(lotaje, secuencias[indice].precioEntrada1, _Symbol, 0, 0, ORDER_TIME_GTC, 0, comentarioBase);
+            Print("📝 Programando SELL STOP (", comentarioBase, ") al precio exacto de ENTRADA #1: ", 
+                 NormalizeDouble(secuencias[indice].precioEntrada1, _Digits));
+        }
+        else
+        {
+            // IMPORTANTE: Usamos el precio exacto de ENTRADA #2
+            // Sin TP en entradas posteriores a la #1 y #2
+            trade.BuyStop(lotaje, secuencias[indice].precioEntrada2, _Symbol, 0, 0, ORDER_TIME_GTC, 0, comentarioBase);
+            Print("📝 Programando BUY STOP (", comentarioBase, ") al precio exacto de ENTRADA #2: ", 
+                 NormalizeDouble(secuencias[indice].precioEntrada2, _Digits));
+        }
+    }
+    
+    resultTicket = trade.ResultOrder();
+    
+    // Verificar si hubo error al programar la siguiente entrada
+    if(resultTicket == 0)
+    {
+        int error = GetLastError();
+        Print("Error al programar ", comentarioBase, ": ", error);
+        return;
+    }
+    
+    if(resultTicket > 0)
+    {
+        RegistrarOrden(indice, resultTicket, comentarioBase);
+        Print(comentarioBase, " programada con lotaje ", lotaje, " al precio exacto de la entrada original");
+        
+        // Actualizar el estado de las secuencias
+        GuardarEstadoSecuencias();
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Función común para iniciar secuencia (compra o venta)            |
+//+------------------------------------------------------------------+
+void IniciarSecuencia(bool esCompra)
+{
+    // Eliminada verificación de límite de secuencias
+    
+    double lotaje = StringToDouble(ObjectGetString(0, EA_OBJ_PREFIX + editLotajeID, OBJPROP_TEXT));
+    if(lotaje <= 0)
+    {
+        Alert("Lotaje inválido");
+        return;
+    }
+
+    double minVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double maxVolume = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+    double volumeStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    lotaje = MathRound(lotaje / volumeStep) * volumeStep;
+    
+    if(lotaje < minVolume || lotaje > maxVolume)
+    {
+        Alert("Lotaje debe estar entre " + DoubleToString(minVolume, 2) + " y " + DoubleToString(maxVolume, 2));
+        return;
+    }
+
+    int tp1 = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editTP1ID, OBJPROP_TEXT));
+    int pipsEntrada2 = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editPipsEntrada2ID, OBJPROP_TEXT));
+    int tp2 = (int)StringToInteger(ObjectGetString(0, EA_OBJ_PREFIX + editTP2ID, OBJPROP_TEXT));
+
+    if(tp1 <= 0 || pipsEntrada2 <= 0 || tp2 <= 0)
+    {
+        Alert("Valores de TP o PIPS inválidos");
+        return;
+    }
+
+    // Encontrar un slot libre para la nueva secuencia
+    int slotLibre = -1;
+    for(int i = 0; i < 20; i++) // Ajustado a 20 para coincidir con el tamaño del array
+    {
+        if(!secuencias[i].activa)
+        {
+            slotLibre = i;
+            break;
+        }
+    }
+    
+    if(slotLibre == -1)
+    {
+        Alert("Error interno: No se encontró slot libre para la secuencia");
+        return;
+    }
+    
+    // Configurar la nueva secuencia
+    secuencias[slotLibre].id = proximoIDSecuencia++;
+    secuencias[slotLibre].activa = true;
+    secuencias[slotLibre].secuenciaActual = 2;  // Comenzamos con ENTRADA #1 y #2 programadas
+    secuencias[slotLibre].tiempoInicio = TimeCurrent();
+    secuencias[slotLibre].numOrdenes = 0;
+    secuencias[slotLibre].tpAlcanzado = false;
+    secuencias[slotLibre].ultimaVerificacionTP = 0;
+    secuencias[slotLibre].cerradaCompletamente = false;
+    secuencias[slotLibre].intentosCierre = 0;
+    secuencias[slotLibre].ultimoCierreIntentado = 0;
+    secuencias[slotLibre].esModoCompra = esCompra;
+    secuencias[slotLibre].ticketEntrada1 = 0;
+    secuencias[slotLibre].ticketEntrada2 = 0;
+    secuencias[slotLibre].entradaPendienteActiva = true;  // Nueva: Inicialmente la entrada pendiente está activa
+    secuencias[slotLibre].ultimaRecreacionPendiente = 0;
+    secuencias[slotLibre].ultimaVerificacionPendientes = 0; // Inicializar nueva variable
+    secuencias[slotLibre].sinOrdenesPendientesDetectado = false; // Inicializar nueva variable
+    secuencias[slotLibre].tpReubicado = false; // Inicializa TP reubicado
+    
+    string comentarioBase = "SEC" + IntegerToString(secuencias[slotLibre].id) + "_";
+    string comentarioEnt1 = comentarioBase + "ENT1";
+    string comentarioEnt2 = comentarioBase + "ENT2";
+    ulong resultTicket = 0;
+    
+    if(esCompra)
+    {
+        // MODO COMPRA: ENTRADA #1 = BUY
+        secuencias[slotLibre].precioEntrada1 = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+        secuencias[slotLibre].tp1Precio = NormalizeDouble(secuencias[slotLibre].precioEntrada1 + (tp1 * _Point), _Digits);
+        
+        trade.Buy(lotaje, _Symbol, 0, 0, secuencias[slotLibre].tp1Precio, comentarioEnt1);
+        resultTicket = trade.ResultOrder();
+        
+        if(resultTicket == 0)
+        {
+            Alert("Error al abrir ENTRADA #1 (BUY): ", GetLastError());
+            secuencias[slotLibre].activa = false;
+            return;
+        }
+        
+        RegistrarOrden(slotLibre, resultTicket, comentarioEnt1);
+
+        // ENTRADA #2: SELL STOP
+        secuencias[slotLibre].precioEntrada2 = NormalizeDouble(secuencias[slotLibre].precioEntrada1 - (pipsEntrada2 * _Point), _Digits);
+        secuencias[slotLibre].tp2Precio = NormalizeDouble(secuencias[slotLibre].precioEntrada2 - (tp2 * _Point), _Digits);
+        
+        // IMPORTANTE: Sin tiempo de expiración (GTC - Good Till Cancelled)
+        trade.SellStop(lotaje * 2, secuencias[slotLibre].precioEntrada2, _Symbol, 0, secuencias[slotLibre].tp2Precio, ORDER_TIME_GTC, 0, comentarioEnt2);
+        resultTicket = trade.ResultOrder();
+    }
+    else
+    {
+        // MODO VENTA: ENTRADA #1 = SELL
+        secuencias[slotLibre].precioEntrada1 = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+        secuencias[slotLibre].tp1Precio = NormalizeDouble(secuencias[slotLibre].precioEntrada1 - (tp1 * _Point), _Digits);
+        
+        trade.Sell(lotaje, _Symbol, 0, 0, secuencias[slotLibre].tp1Precio, comentarioEnt1);
+        resultTicket = trade.ResultOrder();
+        
+        if(resultTicket == 0)
+        {
+            Alert("Error al abrir ENTRADA #1 (SELL): ", GetLastError());
+            secuencias[slotLibre].activa = false;
+            return;
+        }
+        
+        RegistrarOrden(slotLibre, resultTicket, comentarioEnt1);
+
+        // ENTRADA #2: BUY STOP
+        secuencias[slotLibre].precioEntrada2 = NormalizeDouble(secuencias[slotLibre].precioEntrada1 + (pipsEntrada2 * _Point), _Digits);
+        secuencias[slotLibre].tp2Precio = NormalizeDouble(secuencias[slotLibre].precioEntrada2 + (tp2 * _Point), _Digits);
+        
+        // IMPORTANTE: Sin tiempo de expiración (GTC - Good Till Cancelled)
+        trade.BuyStop(lotaje * 2, secuencias[slotLibre].precioEntrada2, _Symbol, 0, secuencias[slotLibre].tp2Precio, ORDER_TIME_GTC, 0, comentarioEnt2);
+        resultTicket = trade.ResultOrder();
+    }
+    
+    if(resultTicket == 0)
+    {
+        Alert("Error al programar ENTRADA #2: ", GetLastError());
+        CerrarSecuencia(slotLibre);
+        return;
+    }
+    
+    RegistrarOrden(slotLibre, resultTicket, comentarioEnt2);
+
+    totalSecuencias++;
+    string tipoSecuencia = esCompra ? "COMPRA" : "VENTA";
+    Print("🔹 Nueva secuencia #", secuencias[slotLibre].id, " iniciada en modo ", tipoSecuencia, 
+          " - ENTRADA #1 y #2 programadas [E1:", secuencias[slotLibre].ticketEntrada1, 
+          ", E2:", secuencias[slotLibre].ticketEntrada2, "]");
+    
+    // Guardar el estado inmediatamente para preservarlo en cambios de timeframe
+    GuardarEstadoSecuencias();
+}
